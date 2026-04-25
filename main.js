@@ -89,7 +89,10 @@ class WorkerPhysics {
         this.worker = new Worker('physics-worker.js');
         this.worker.onmessage = e => {
             if (e.data.type==='update' && this._resolve) {
-                this._resolve(new Float32Array(e.data.positions));
+                this._resolve({
+                    positions: new Float32Array(e.data.positions),
+                    masses: e.data.masses ? new Float32Array(e.data.masses) : null
+                });
                 this._resolve = null;
             }
         };
@@ -217,8 +220,15 @@ window.addEventListener('resize', () => {
 });
 
 // ────────────────── 6. 渲染迴圈 ──────────────────
-function updateVisuals(positions) {
+function updateVisuals(positions, masses) {
     for (let i = 0; i < meshes.length; i++) {
+        // 跳過已消亡的天體
+        if (masses && masses[i] === 0) {
+            meshes[i].visible = false;
+            trails[i].line.visible = false;
+            if (i < mainThreadBodies.length) mainThreadBodies[i].m = 0;
+            continue;
+        }
         const px=positions[i*3], py=positions[i*3+1], pz=positions[i*3+2];
         meshes[i].position.set(px, py, pz);
         const t = trails[i]; t.skip++;
@@ -247,8 +257,8 @@ function animate() {
     if (!pending && physics) {
         pending = true;
         const steps = parseInt(speedSlider.value);
-        physics.step(steps).then(positions => {
-            updateVisuals(positions);
+        physics.step(steps).then(result => {
+            updateVisuals(result.positions, result.masses);
             pending = false;
         });
     }

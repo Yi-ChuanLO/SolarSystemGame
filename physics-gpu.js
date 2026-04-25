@@ -57,8 +57,13 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
             let step_f = sDtCur;
             var v = sB[i].vel.xyz + 0.5 * sB[i].acc.xyz * step_f;
             var p = sB[i].pos.xyz + v * step_f;
-            if (any(abs(p) > vec3f(1e18)) || any(abs(v) > vec3f(1e18))) { p = vec3f(0.0); v = vec3f(0.0); }
-            sB[i].pos = vec4f(p, sB[i].pos.w);
+            var m = sB[i].pos.w;
+            if (any(abs(p) > vec3f(1e10)) || any(abs(v) > vec3f(1e10))) { 
+                p = vec3f(1e12); 
+                v = vec3f(0.0); 
+                m = 0.0; // Zero out mass for out-of-bounds or swallowed objects
+            }
+            sB[i].pos = vec4f(p, m);
             sB[i].vel = vec4f(v, 0.0);
         }
         workgroupBarrier();
@@ -68,42 +73,71 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
             let pi = sB[i].pos; let vi = sB[i].vel; let mi = pi.w;
             var acc = vec3f(0.0);
             var mdt = P.BASE_DT;
+            var swallowed = false;
 
-            for (var j = 0u; j < N; j++) {
-                if (j == i) { continue; }
-                let pj = sB[j].pos; let vj = sB[j].vel; let mj = pj.w;
-                let r = pj.xyz - pi.xyz;
-                let d2 = dot(r,r) + P.EPS2;
-                let d = sqrt(d2);
-                let id3 = 1.0 / (d2 * d);
+            if (mi > 0.0) {
+                for (var j = 0u; j < N; j++) {
+                    if (j == i) { continue; }
+                    let pj = sB[j].pos; let vj = sB[j].vel; let mj = pj.w;
+                    if (mj == 0.0) { continue; }
 
-                mdt = min(mdt, P.ETA * sqrt(d * d2 / (P.G * (mi+mj))));
-                let dv = vi.xyz - vj.xyz;
-                let vr2 = dot(dv,dv);
-                if (vr2 > 1e-30) { mdt = min(mdt, P.ETA * d / sqrt(vr2)); }
+                    let r = pj.xyz - pi.xyz;
+                    let d2 = dot(r,r) + P.EPS2;
+                    let d = sqrt(d2);
 
-                var g = P.G * id3 * mj * r;
+                    // 黑洞吸收邏輯 (Black Hole Absorption)
+                    let Rs = 2.0 * P.G * mj / P.C2;
+                    let R_merge = max(Rs * 1.5, 0.02);
+                    if (d < R_merge && (mi < mj || (mi == mj && i > j))) {
+                        swallowed = true;
+                        break; // 被吞噬，終止計算
+                    }
 
-                // 1PN EIH GR (修正後的符號)
-                if (P.grOn != 0u) {
-                    let vi2 = dot(vi.xyz, vi.xyz); let vj2 = dot(vj.xyz, vj.xyz);
-                    let vdv = dot(vi.xyz, vj.xyz);
-                    let ndvj = dot(r, vj.xyz) / d;
-                    
-                    let t1 = vi2 + 2.0*vj2 - 4.0*vdv - 1.5*ndvj*ndvj - (5.0*P.G*mi + 4.0*P.G*mj)/d;
-                    let t2 = dot(r, 4.0*vi.xyz - 3.0*vj.xyz);
-                    let cf = P.G * mj / (P.C2 * d2 * d);
-                    
-                    var gr = cf * (r * t1 - (vi.xyz - vj.xyz) * t2);
-                    
-                    let gm = length(g); let grm = length(gr);
-                    if (grm > gm && gm > 0.0) { gr *= gm/grm; }
-                    g += gr;
+                    let id3 = 1.0 / (d2 * d);
+
+                    mdt = min(mdt, P.ETA * sqrt(d * d2 / (P.G * (mi+mj))));
+                    let dv = vi.xyz - vj.xyz;
+                    let vr2 = dot(dv,dv);
+                    if (vr2 > 1e-30) { mdt = min(mdt, P.ETA * d / sqrt(vr2)); }
+
+                    var g = P.G * id3 * mj * r;
+
+                    // 1PN EIH GR (修正後的符號)
+                    if (P.grOn != 0u) {
+                        let vi2 = dot(vi.xyz, vi.xyz); let vj2 = dot(vj.xyz, vj.xyz);
+                        let vdv = dot(vi.xyz, vj.xyz);
+                        let ndvj = dot(r, vj.xyz) / d;
+                        
+                        let t1 = vi2 + 2.0*vj2 - 4.0*vdv - 1.5*ndvj*ndvj - (P.G*mi + 4.0*P.G*mj)/d;
+                        let t2 = dot(r, 4.0*vi.xyz - 3.0*vj.xyz);
+                        let cf = P.G * mj / (P.C2 * d2 * d);
+                        
+                        var gr = cf * (r * t1 - (vi.xyz - vj.xyz) * t2);
+                        
+                        let gm = length(g); let grm = length(gr);
+                        if (grm > 3.0*gm && gm > 0.0) { gr *= 3.0*gm/grm; }
+                        g += gr;
+                    }
+                    acc += g;
                 }
-                acc += g;
             }
-            sB[i].acc = vec4f(acc, 0.0);
-            atomicMin(&sDtNext, bitcast<u32>(max(mdt, P.MIN_DT)));
+            
+            if (swallowed) {
+                sB[i].pos = vec4f(1e12, 1e12, 1e12, 0.0); // 直接歸零質量並移至遠方
+                sB[i].vel = vec4f(0.0);
+                sB[i].acc = vec4f(0.0);
+            } else if (mi > 0.0) {
+                sB[i].acc = vec4f(acc, 0.0);
+                atomicMin(&sDtNext, bitcast<u32>(max(mdt, P.MIN_DT)));
+            }
+        }
+        workgroupBarrier();
+
+        // 步長平滑化 (Timestep Smoothing): 允許快速縮小(0.5x)，緩慢放大(1.1x)，以保護辛結構與能量守恆
+        if (i == 0) {
+            let targetDt = bitcast<f32>(atomicLoad(&sDtNext));
+            let smoothedDt = clamp(targetDt, sDtCur * 0.5, sDtCur * 1.1);
+            atomicStore(&sDtNext, bitcast<u32>(smoothedDt));
         }
         workgroupBarrier();
 
@@ -157,14 +191,14 @@ fn initAccel(@builtin(local_invocation_id) lid: vec3u) {
             let vdv = dot(vi.xyz, vj.xyz);
             let ndvj = dot(r, vj.xyz) / d;
             
-            let t1 = vi2 + 2.0*vj2 - 4.0*vdv - 1.5*ndvj*ndvj - (5.0*P.G*mi + 4.0*P.G*mj)/d;
+            let t1 = vi2 + 2.0*vj2 - 4.0*vdv - 1.5*ndvj*ndvj - (P.G*mi + 4.0*P.G*mj)/d;
             let t2 = dot(r, 4.0*vi.xyz - 3.0*vj.xyz);
             let cf = P.G * mj / (P.C2 * d2 * d);
             
             var gr = cf * (r * t1 - (vi.xyz - vj.xyz) * t2);
             
             let gm = length(g); let grm = length(gr);
-            if (grm > gm && gm > 0.0) { gr *= gm/grm; }
+            if (grm > 3.0*gm && gm > 0.0) { gr *= 3.0*gm/grm; }
             g += gr;
         }
         acc += g;
@@ -278,15 +312,17 @@ export class WebGPUPhysics {
         this.readBuf.unmap();
 
         const pos = new Float32Array(this.N * 3);
+        const masses = new Float32Array(this.N);
         for (let i = 0; i < this.N; i++) {
             pos[i*3]   = raw[i*12];
             pos[i*3+1] = raw[i*12+1];
             pos[i*3+2] = raw[i*12+2];
+            masses[i]  = raw[i*12+3];
         }
-        return pos;
+        return { positions: pos, masses };
     }
 
-    addBody(body) {
+    async addBody(body) {
         if (this.N >= MAX_BODIES) return;
         const o = this.N * 12;
         const d = new Float32Array(12);
@@ -305,6 +341,7 @@ export class WebGPUPhysics {
         p.dispatchWorkgroups(1);
         p.end();
         this.device.queue.submit([enc.finish()]);
+        await this.device.queue.onSubmittedWorkDone();
     }
 
     updateSettings({ enableGR, cScale }) {
@@ -321,7 +358,7 @@ export class WebGPUPhysics {
         const f = new Float32Array(buf);
         const u = new Uint32Array(buf);
         f[0] = G;           // G
-        f[1] = 0.001;       // EPSILON_SQ
+        f[1] = 1e-10;       // EPSILON_SQ
         f[2] = 0.0001;      // BASE_DT
         f[3] = 1e-8;        // MIN_DT
         f[4] = 0.03;        // ETA
