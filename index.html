@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>真實尺度太陽系 N-body 引力模擬器</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            color: white;
+            user-select: none;
+        }
+
+        #canvas-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 1;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 10;
+            pointer-events: none;
+        }
+
+        .pointer-events-auto {
+            pointer-events: auto;
+        }
+
+        /* 隱藏原生滾動條 */
+        ::-webkit-scrollbar {
+            display: none;
+        }
+    </style>
+    <!-- 使用 Import Map 載入 Three.js -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+
+<body>
+
+    <!-- 3D 渲染容器 -->
+    <div id="canvas-container"></div>
+
+    <!-- UI 控制介面 -->
+    <div id="ui-layer" class="p-6 flex flex-col justify-between">
+        <div
+            class="pointer-events-auto bg-black/50 backdrop-blur-md border border-white/20 p-6 rounded-2xl max-w-sm shadow-2xl">
+            <div class="flex justify-between items-center mb-2">
+                <h1
+                    class="text-2xl font-bold tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-500">
+                    太陽系 N-body 模擬</h1>
+                <button id="toggle-ui-btn" class="text-xl text-gray-400 hover:text-white transition-colors"
+                    title="摺疊/展開選單">🔽</button>
+            </div>
+
+            <div id="ui-content" class="transition-all duration-300">
+                <p class="text-sm text-gray-300 mb-4 border-b border-white/20 pb-4">
+                    採用 Velocity Verlet 積分器（自適應步長，近似能量守恆）。<br>
+                    單位：AU (距離) / M☉ (質量) / 年 (時間)
+                </p>
+
+                <!-- 新增：互動模式切換 -->
+                <div class="mb-4 flex gap-2">
+                    <button id="mode-view"
+                        class="flex-1 py-1.5 px-2 bg-blue-600 rounded-lg text-sm font-bold border border-blue-400 transition-colors">👀
+                        觀察模式</button>
+                    <button id="mode-place"
+                        class="flex-1 py-1.5 px-2 bg-white/10 rounded-lg text-sm font-bold border border-white/20 hover:bg-white/20 transition-colors">➕
+                        放置模式</button>
+                </div>
+
+                <div class="mb-4">
+                    <p class="text-sm font-semibold text-gray-400 mb-2">生成極端天體 (點擊畫面放置)</p>
+                    <div class="grid grid-cols-1 gap-2">
+                        <button id="btn-wd"
+                            class="celestial-btn py-2 px-4 rounded-lg bg-white/10 hover:bg-blue-500/30 border border-white/10 transition-all text-left flex justify-between items-center"
+                            data-type="wd">
+                            <span>⚪ 白矮星</span> <span class="text-xs text-blue-300">1.2 M☉</span>
+                        </button>
+                        <button id="btn-ns"
+                            class="celestial-btn py-2 px-4 rounded-lg bg-white/10 hover:bg-cyan-500/30 border border-white/10 transition-all text-left flex justify-between items-center"
+                            data-type="ns">
+                            <span>✨ 中子星</span> <span class="text-xs text-cyan-300">2.0 M☉</span>
+                        </button>
+                        <button id="btn-bh"
+                            class="celestial-btn py-2 px-4 rounded-lg bg-white/10 hover:bg-purple-600/50 border border-white/10 transition-all text-left flex justify-between items-center shadow-[0_0_15px_rgba(168,85,247,0.5)]"
+                            data-type="bh">
+                            <span>🕳️ 恆星黑洞</span> <span class="text-xs text-purple-300">50.0 M☉</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="mb-4 border-t border-white/20 pt-4">
+                    <div class="flex items-center justify-between mb-2">
+                        <label class="text-sm font-semibold text-gray-400" for="gr-toggle">廣義相對論 (1PN 近似)</label>
+                        <input type="checkbox" id="gr-toggle" class="w-4 h-4 accent-purple-500">
+                    </div>
+                    <div class="flex flex-col gap-1">
+                        <div class="flex justify-between text-xs text-gray-400">
+                            <span>光速縮放 (放大 GR 效應)</span>
+                            <span id="c-scale-display">1.000x</span>
+                        </div>
+                        <input type="range" id="c-scale-slider" min="-3" max="0" step="0.1" value="0"
+                            class="w-full accent-purple-500" disabled>
+                    </div>
+                </div>
+
+                <div>
+                    <p class="text-sm font-semibold text-gray-400 mb-2">模擬速度</p>
+                    <input type="range" id="speed-slider" min="1" max="100" value="20" class="w-full accent-blue-500">
+                </div>
+            </div> <!-- 結束 ui-content -->
+        </div>
+
+        <div id="tip-text"
+            class="pointer-events-auto text-center self-center bg-black/60 px-6 py-2 rounded-full border border-white/10 animate-pulse text-sm text-blue-200">
+            💡 目前為「觀察模式」：可拖曳旋轉、右鍵平移、滾輪縮放視角
+        </div>
+    </div>
+
+    <!-- 物理引擎：Web Worker (Inline) -->
+    <script id="physics-worker" type="javascript/worker">
+        // 萬有引力常數 G (單位: AU^3 / (M_sun * Year^2)) = 4 * PI^2
+        const G = 4 * Math.pow(Math.PI, 2); 
+        const EPSILON_SQ = 0.001; // 引力軟化參數平方，避免奇異點 (Softening Length)
+        
+        // 真實光速 c 單位: AU/Year 
+        const TRUE_C = 63239.7263;
+        
+        let bodies = [];
+        const BASE_DT = 0.0001; // 最大時間步長 (年)，正常軌道使用
+        const MIN_DT  = 1e-8;   // 最小時間步長，防止無限細分
+        const ETA     = 0.03;   // Aarseth 自適應安全係數
+        let nextSafeDt = BASE_DT; // 由 computeAccelerations 更新，verletStep 讀取
+        let enableGR = false;
+        let cValue = TRUE_C;
+        let C2 = cValue * cValue;
+        
+        // 接收主執行緒訊息
+        self.onmessage = function(e) {
+            const data = e.data;
+            if (data.type === 'init') {
+                bodies = data.bodies;
+                computeAccelerations(); // 預先計算 a₀，確保第一步 VV 為完整二階精度
+            } else if (data.type === 'update_settings') {
+                enableGR = data.enableGR;
+                cValue = TRUE_C * data.cScale;
+                C2 = cValue * cValue;
+            } else if (data.type === 'add') {
+                bodies.push(data.body);
+                computeAccelerations(); // 納入新天體引力，更新所有天體加速度
+            } else if (data.type === 'step') {
+                const steps = data.steps; // 子步進數量 (Sub-stepping for stability)
+                for (let s = 0; s < steps; s++) {
+                    verletStep();
+                }
+                // 回傳更新後的位置給主執行緒
+                const positions = new Float32Array(bodies.length * 3);
+                for(let i=0; i<bodies.length; i++) {
+                    positions[i*3] = bodies[i].x;
+                    positions[i*3+1] = bodies[i].y;
+                    positions[i*3+2] = bodies[i].z;
+                }
+                self.postMessage({ type: 'update', positions: positions }, [positions.buffer]);
+            }
+        };
+
+        // 加速度計算：N-body 牛頓重力 + 可選 1PN EIH 廣義相對論修正
+        // 抽離為獨立函式，供 init、add、verletStep 共用
+        function computeAccelerations() {
+            const N = bodies.length;
+            for (let i = 0; i < N; i++) {
+                bodies[i].ax = 0;
+                bodies[i].ay = 0;
+                bodies[i].az = 0;
+            }
+            // 自適應時間步長：重置為最大值，配對迴圈中同步更新
+            let safeDt = BASE_DT;
+            for (let i = 0; i < N; i++) {
+                for (let j = i + 1; j < N; j++) {
+                    const bi = bodies[i];
+                    const bj = bodies[j];
+                    const dx = bj.x - bi.x;
+                    const dy = bj.y - bi.y;
+                    const dz = bj.z - bi.z;
+                    const distSq = dx*dx + dy*dy + dz*dz + EPSILON_SQ;
+                    const dist = Math.sqrt(distSq);
+
+                    // ── 自適應時間步長（雙準則）──
+                    // 準則 1：Aarseth 動力學時標 t_dyn = ETA * sqrt(r³ / G(m_i+m_j))
+                    const t_dyn = ETA * Math.sqrt(dist * distSq / (G * (bi.m + bj.m)));
+                    if (t_dyn < safeDt) safeDt = t_dyn;
+
+                    // 準則 2：速度準則 t_vel = ETA * r / |v_rel|
+                    // 當兩體高速接近時，位置準則會「滯後」——距離還遠但下一步就穿越
+                    // 速度準則可及時捕捉這種情形，防止近距離彈飛
+                    const dvx = bi.vx - bj.vx;
+                    const dvy = bi.vy - bj.vy;
+                    const dvz = bi.vz - bj.vz;
+                    const vRelSq = dvx*dvx + dvy*dvy + dvz*dvz;
+                    if (vRelSq > 1e-30) {
+                        const t_vel = ETA * dist / Math.sqrt(vRelSq);
+                        if (t_vel < safeDt) safeDt = t_vel;
+                    }
+
+                    const f_mag_base = G / (distSq * dist);
+                    let ax_i = f_mag_base * bj.m * dx;
+                    let ay_i = f_mag_base * bj.m * dy;
+                    let az_i = f_mag_base * bj.m * dz;
+                    let ax_j = -f_mag_base * bi.m * dx;
+                    let ay_j = -f_mag_base * bi.m * dy;
+                    let az_j = -f_mag_base * bi.m * dz;
+                    if (enableGR) {
+                        const vix = bi.vx, viy = bi.vy, viz = bi.vz;
+                        const vjx = bj.vx, vjy = bj.vy, vjz = bj.vz;
+                        const vi2 = vix*vix + viy*viy + viz*viz;
+                        const vj2 = vjx*vjx + vjy*vjy + vjz*vjz;
+                        const vi_dot_vj = vix*vjx + viy*vjy + viz*vjz;
+                        const r_dot_vj = dx*vjx + dy*vjy + dz*vjz;
+                        const term1_i = (5*G*bi.m + 4*G*bj.m)/dist - vi2 - 2*vj2 + 4*vi_dot_vj + 1.5*(r_dot_vj/dist)*(r_dot_vj/dist);
+                        const term2_i = dx*(4*vix-3*vjx) + dy*(4*viy-3*vjy) + dz*(4*viz-3*vjz);
+                        const c_factor_i = (G*bj.m)/(C2*distSq*dist);
+                        let gr_ax_i = c_factor_i * (dx*term1_i + (vix-vjx)*term2_i);
+                        let gr_ay_i = c_factor_i * (dy*term1_i + (viy-vjy)*term2_i);
+                        let gr_az_i = c_factor_i * (dz*term1_i + (viz-vjz)*term2_i);
+                        // 限制 1PN 修正幅度不超過牛頓項，防止低 c-scale 時爆炸
+                        const newt_mag_i = Math.sqrt(ax_i*ax_i + ay_i*ay_i + az_i*az_i);
+                        const gr_mag_i = Math.sqrt(gr_ax_i*gr_ax_i + gr_ay_i*gr_ay_i + gr_az_i*gr_az_i);
+                        if (gr_mag_i > newt_mag_i && newt_mag_i > 0) {
+                            const clamp = newt_mag_i / gr_mag_i;
+                            gr_ax_i *= clamp; gr_ay_i *= clamp; gr_az_i *= clamp;
+                        }
+                        ax_i += gr_ax_i; ay_i += gr_ay_i; az_i += gr_az_i;
+                        const rji_x=-dx, rji_y=-dy, rji_z=-dz;
+                        const rji_dot_vi = rji_x*vix + rji_y*viy + rji_z*viz;
+                        const term1_j = (5*G*bj.m + 4*G*bi.m)/dist - vj2 - 2*vi2 + 4*vi_dot_vj + 1.5*(rji_dot_vi/dist)*(rji_dot_vi/dist);
+                        const term2_j = rji_x*(4*vjx-3*vix) + rji_y*(4*vjy-3*viy) + rji_z*(4*vjz-3*viz);
+                        const c_factor_j = (G*bi.m)/(C2*distSq*dist);
+                        let gr_ax_j = c_factor_j * (rji_x*term1_j + (vjx-vix)*term2_j);
+                        let gr_ay_j = c_factor_j * (rji_y*term1_j + (vjy-viy)*term2_j);
+                        let gr_az_j = c_factor_j * (rji_z*term1_j + (vjz-viz)*term2_j);
+                        const newt_mag_j = Math.sqrt(ax_j*ax_j + ay_j*ay_j + az_j*az_j);
+                        const gr_mag_j = Math.sqrt(gr_ax_j*gr_ax_j + gr_ay_j*gr_ay_j + gr_az_j*gr_az_j);
+                        if (gr_mag_j > newt_mag_j && newt_mag_j > 0) {
+                            const clamp = newt_mag_j / gr_mag_j;
+                            gr_ax_j *= clamp; gr_ay_j *= clamp; gr_az_j *= clamp;
+                        }
+                        ax_j += gr_ax_j; ay_j += gr_ay_j; az_j += gr_az_j;
+                    }
+                    bi.ax += ax_i; bi.ay += ay_i; bi.az += az_i;
+                    bj.ax += ax_j; bj.ay += ay_j; bj.az += az_j;
+                }
+            }
+            // 儲存本次計算出的安全步長，供下一個 verletStep 使用
+            nextSafeDt = Math.max(safeDt, MIN_DT);
+        }
+
+        // Velocity Verlet 辛積分演算法（自適應時間步長版）
+        function verletStep() {
+            const N = bodies.length;
+            // 讀取上一步 computeAccelerations 計算出的安全步長
+            // 近距離接觸時此值會自動縮小，遠距離時恢復 BASE_DT
+            const dt = nextSafeDt;
+            // 1. 半步 kick + 全步 drift
+            for (let i = 0; i < N; i++) {
+                const b = bodies[i];
+                b.vx += 0.5 * b.ax * dt;
+                b.vy += 0.5 * b.ay * dt;
+                b.vz += 0.5 * b.az * dt;
+                b.x += b.vx * dt;
+                b.y += b.vy * dt;
+                b.z += b.vz * dt;
+                // NaN 防護：若出現損壞數值，凍結該天體
+                if (!isFinite(b.x) || !isFinite(b.vx)) {
+                    b.x = b.y = b.z = 0;
+                    b.vx = b.vy = b.vz = 0;
+                    b.ax = b.ay = b.az = 0;
+                }
+            }
+            // 2. 以新位置計算加速度（同時更新 nextSafeDt 供下一步使用）
+            computeAccelerations();
+            // 3. 第二個半步 kick（使用同一個 dt 維持 VV 時間對稱性）
+            for (let i = 0; i < N; i++) {
+                const b = bodies[i];
+                b.vx += 0.5 * b.ax * dt;
+                b.vy += 0.5 * b.ay * dt;
+                b.vz += 0.5 * b.az * dt;
+            }
+        }
+    </script>
+
+    <!-- 主程式邏輯 -->
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        // --- 1. 太陽系真實初始資料 (質量: M_sun, 距離: AU, 速度: AU/Year) ---
+        // 軌道速度計算方式: v = sqrt(G * M_sun / r) = sqrt(4*pi^2 / r) = 2*pi / sqrt(r)
+        const TWO_PI = 2 * Math.PI;
+        const initialBodiesData = [
+            { id: 'sun', name: '太陽', m: 1.0, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, color: 0xffdd00, radius: 0.1 },
+            { id: 'mercury', name: '水星', m: 1.65e-7, x: 0.387, y: 0, z: 0, vx: 0, vy: 0, vz: TWO_PI / Math.sqrt(0.387), color: 0xaaaaaa, radius: 0.02 },
+            { id: 'venus', name: '金星', m: 2.45e-6, x: 0.723, y: 0, z: 0, vx: 0, vy: 0, vz: TWO_PI / Math.sqrt(0.723), color: 0xffcc88, radius: 0.04 },
+            { id: 'earth', name: '地球', m: 3.0e-6, x: 1.0, y: 0, z: 0, vx: 0, vy: 0, vz: TWO_PI, color: 0x4488ff, radius: 0.045 },
+            { id: 'mars', name: '火星', m: 3.2e-7, x: 1.524, y: 0, z: 0, vx: 0, vy: 0, vz: TWO_PI / Math.sqrt(1.524), color: 0xff5533, radius: 0.03 },
+            { id: 'jupiter', name: '木星', m: 0.00095, x: 5.20, y: 0, z: 0, vx: 0, vy: 0, vz: TWO_PI / Math.sqrt(5.20), color: 0xddaa77, radius: 0.08 },
+            { id: 'saturn', name: '土星', m: 0.00028, x: 9.58, y: 0, z: 0, vx: 0, vy: 0, vz: TWO_PI / Math.sqrt(9.58), color: 0xeecc99, radius: 0.07 },
+            { id: 'uranus', name: '天王星', m: 4.37e-5, x: 19.20, y: 0, z: 0, vx: 0, vy: 0, vz: TWO_PI / Math.sqrt(19.20), color: 0x66ccff, radius: 0.06 },
+            { id: 'neptune', name: '海王星', m: 0.00005, x: 30.05, y: 0, z: 0, vx: 0, vy: 0, vz: TWO_PI / Math.sqrt(30.05), color: 0x3366ff, radius: 0.06 },
+        ];
+
+        // 主執行緒鏡像天體清單，用於計算質心與圓軌道速度（不需加速度資料）
+        const G_MAIN = 4 * Math.PI * Math.PI;
+        let mainThreadBodies = initialBodiesData.map(b => ({ m: b.m, x: b.x, z: b.z }));
+
+        // --- 2. 初始化 Three.js 渲染引擎 ---
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x000000, 0.015);
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 1000);
+        camera.position.set(0, 15, 20); // 俯瞰黃道面
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        container.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.maxDistance = 200;
+
+        // 視覺輔助：黃道面網格
+        const gridHelper = new THREE.GridHelper(100, 100, 0x333333, 0x111111);
+        scene.add(gridHelper);
+
+        // 隱藏的射線碰撞面 (用於滑鼠點擊放置天體)
+        const planeGeo = new THREE.PlaneGeometry(500, 500);
+        planeGeo.rotateX(-Math.PI / 2);
+        const hitPlane = new THREE.Mesh(planeGeo, new THREE.MeshBasicMaterial({ visible: false }));
+        scene.add(hitPlane);
+
+        // --- 3. 天體視覺物件與軌跡管理 ---
+        const meshes = [];
+        const trails = [];
+        const MAX_TRAIL_LENGTH = 300;
+
+        // 建立清晰文字 Billboard (Texture Canvas)
+        function createTextSprite(message, colorStr) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 256; canvas.height = 128;
+            const ctx = canvas.getContext('2d');
+            ctx.font = 'bold 32px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillStyle = colorStr;
+            ctx.shadowColor = 'black';
+            ctx.shadowBlur = 4;
+            ctx.fillText(message, 128, 64);
+
+            const texture = new THREE.CanvasTexture(canvas);
+            const spriteMat = new THREE.SpriteMaterial({ map: texture, depthTest: false });
+            const sprite = new THREE.Sprite(spriteMat);
+            sprite.scale.set(2, 1, 1);
+            sprite.renderOrder = 999; // 確保在最上層
+            return sprite;
+        }
+
+        // 建立單一天體 3D 物件
+        function createBodyVisual(bodyData) {
+            // 球體
+            const geo = new THREE.SphereGeometry(bodyData.radius, 32, 32);
+            const mat = new THREE.MeshBasicMaterial({ color: bodyData.color });
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.set(bodyData.x, bodyData.y, bodyData.z);
+
+            // 標籤
+            const sprite = createTextSprite(bodyData.name, '#' + bodyData.color.toString(16).padStart(6, '0'));
+            sprite.position.y = bodyData.radius + 0.2;
+            mesh.add(sprite);
+
+            // 軌跡線 (使用 BufferGeometry 獲得最佳效能)
+            const trailGeo = new THREE.BufferGeometry();
+            const trailPositions = new Float32Array(MAX_TRAIL_LENGTH * 3);
+            trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+            trailGeo.setDrawRange(0, 0);
+            const trailMat = new THREE.LineBasicMaterial({
+                color: bodyData.color,
+                transparent: true,
+                opacity: 0.4,
+                blending: THREE.AdditiveBlending
+            });
+            const trail = new THREE.Line(trailGeo, trailMat);
+
+            scene.add(mesh);
+            scene.add(trail);
+
+            meshes.push(mesh);
+            trails.push({
+                line: trail,
+                positions: trailPositions,
+                count: 0,
+                frameSkipper: 0
+            });
+        }
+
+        // 初始化場景視覺
+        initialBodiesData.forEach(createBodyVisual);
+
+        // --- 4. 初始化 Web Worker 物理引擎 ---
+        const workerBlob = new Blob([document.getElementById('physics-worker').textContent], { type: 'application/javascript' });
+        const worker = new Worker(URL.createObjectURL(workerBlob));
+
+        // 將初始狀態 (位置、速度、質量) 傳送給 Worker，需包含加速度 a 以防出錯
+        const physicsState = initialBodiesData.map(b => ({
+            m: b.m, x: b.x, y: b.y, z: b.z, vx: b.vx, vy: b.vy, vz: b.vz, ax: 0, ay: 0, az: 0
+        }));
+
+        // 修正系統總動量為零（消除質心漂移）
+        {
+            let totalM = 0, px = 0, py = 0, pz = 0;
+            physicsState.forEach(b => { totalM += b.m; px += b.m * b.vx; py += b.m * b.vy; pz += b.m * b.vz; });
+            const vcx = px / totalM, vcy = py / totalM, vcz = pz / totalM;
+            physicsState.forEach(b => { b.vx -= vcx; b.vy -= vcy; b.vz -= vcz; });
+        }
+
+        worker.postMessage({ type: 'init', bodies: physicsState });
+
+        // 狀態同步與更新標記
+        let pendingPhysicsUpdate = false;
+
+        worker.onmessage = function (e) {
+            if (e.data.type === 'update') {
+                const positions = new Float32Array(e.data.positions);
+
+                // 更新 Three.js 座標與軌跡
+                for (let i = 0; i < meshes.length; i++) {
+                    const px = positions[i * 3];
+                    const py = positions[i * 3 + 1];
+                    const pz = positions[i * 3 + 2];
+
+                    meshes[i].position.set(px, py, pz);
+
+                    // 更新軌跡 (每隔幾幀記錄一次以拉長軌跡視覺)
+                    const trail = trails[i];
+                    trail.frameSkipper++;
+                    if (trail.frameSkipper > 2) { // 記錄頻率
+                        trail.frameSkipper = 0;
+
+                        // Shift array
+                        for (let j = MAX_TRAIL_LENGTH - 1; j > 0; j--) {
+                            trail.positions[j * 3] = trail.positions[(j - 1) * 3];
+                            trail.positions[j * 3 + 1] = trail.positions[(j - 1) * 3 + 1];
+                            trail.positions[j * 3 + 2] = trail.positions[(j - 1) * 3 + 2];
+                        }
+                        // Insert new
+                        trail.positions[0] = px;
+                        trail.positions[1] = py;
+                        trail.positions[2] = pz;
+
+                        if (trail.count < MAX_TRAIL_LENGTH) trail.count++;
+                        trail.line.geometry.setDrawRange(0, trail.count);
+                        trail.line.geometry.attributes.position.needsUpdate = true;
+                    }
+                }
+                pendingPhysicsUpdate = false;
+            }
+        };
+
+        // --- 5. UI 互動與極端天體生成 ---
+        // 新增：摺疊面板邏輯
+        const uiContent = document.getElementById('ui-content');
+        const toggleUiBtn = document.getElementById('toggle-ui-btn');
+        toggleUiBtn.addEventListener('click', () => {
+            uiContent.classList.toggle('hidden');
+            toggleUiBtn.innerText = uiContent.classList.contains('hidden') ? '🔼' : '🔽';
+        });
+
+        // 新增：觀察模式/放置模式切換邏輯
+        let interactionMode = 'view'; // 預設為觀察模式，避免誤觸
+        const modeViewBtn = document.getElementById('mode-view');
+        const modePlaceBtn = document.getElementById('mode-place');
+        const tipText = document.getElementById('tip-text');
+
+        function setInteractionMode(mode) {
+            interactionMode = mode;
+            if (mode === 'view') {
+                modeViewBtn.className = 'flex-1 py-1.5 px-2 bg-blue-600 rounded-lg text-sm font-bold border border-blue-400 transition-colors';
+                modePlaceBtn.className = 'flex-1 py-1.5 px-2 bg-white/10 rounded-lg text-sm font-bold border border-white/20 hover:bg-white/20 transition-colors';
+                tipText.innerText = '💡 目前為「觀察模式」：可左鍵拖曳旋轉、右鍵平移、滾輪縮放視角';
+            } else {
+                modePlaceBtn.className = 'flex-1 py-1.5 px-2 bg-blue-600 rounded-lg text-sm font-bold border border-blue-400 transition-colors';
+                modeViewBtn.className = 'flex-1 py-1.5 px-2 bg-white/10 rounded-lg text-sm font-bold border border-white/20 hover:bg-white/20 transition-colors';
+                tipText.innerText = '💡 目前為「放置模式」：點擊網格即可放置天體';
+            }
+        }
+
+        modeViewBtn.addEventListener('click', () => setInteractionMode('view'));
+        modePlaceBtn.addEventListener('click', () => setInteractionMode('place'));
+        setInteractionMode('view'); // 初始化狀態
+
+        let selectedExtremeType = 'wd';
+        const EXTREME_BODIES = {
+            'wd': { name: '白矮星', m: 1.2, color: 0xffffff, radius: 0.05 },
+            'ns': { name: '中子星', m: 2.0, color: 0x00ffff, radius: 0.03 },
+            'bh': { name: '黑洞', m: 50.0, color: 0xaa00ff, radius: 0.2 } // 加上光暈顏色
+        };
+
+        // 按鈕高亮切換
+        document.querySelectorAll('.celestial-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                document.querySelectorAll('.celestial-btn').forEach(b => b.classList.remove('bg-white/30', 'border-white'));
+                btn.classList.add('bg-white/30', 'border-white');
+                selectedExtremeType = btn.getAttribute('data-type');
+            });
+        });
+        document.getElementById('btn-wd').click(); // 預設選中白矮星
+
+        const speedSlider = document.getElementById('speed-slider');
+        const grToggle = document.getElementById('gr-toggle');
+        const cScaleSlider = document.getElementById('c-scale-slider');
+        const cScaleDisplay = document.getElementById('c-scale-display');
+
+        // 更新物理引擎設定
+        function updatePhysicsSettings() {
+            // 滑桿設定為對數刻度 (-3 到 0)，代表 10^-3 到 10^0 倍的光速
+            const scale = Math.pow(10, parseFloat(cScaleSlider.value));
+            cScaleDisplay.innerText = scale.toFixed(3) + 'x';
+            cScaleSlider.disabled = !grToggle.checked;
+
+            worker.postMessage({
+                type: 'update_settings',
+                enableGR: grToggle.checked,
+                cScale: scale
+            });
+        }
+
+        grToggle.addEventListener('change', updatePhysicsSettings);
+        cScaleSlider.addEventListener('input', updatePhysicsSettings);
+
+        // 射線點擊處理 (放置天體)
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+
+        window.addEventListener('click', (e) => {
+            // 如果不是放置模式，則不觸發放置邏輯
+            if (interactionMode !== 'place') return;
+
+            // 排除點擊在 UI 上的事件
+            if (e.target.closest('#ui-layer > div')) return;
+
+            mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObject(hitPlane);
+
+            if (intersects.length > 0) {
+                const hitPoint = intersects[0].point;
+                const template = EXTREME_BODIES[selectedExtremeType];
+
+                // 計算質心與總質量（以現有天體為基準）
+                let totalMass = 0, cx = 0, cz = 0;
+                mainThreadBodies.forEach(b => { totalMass += b.m; cx += b.m * b.x; cz += b.m * b.z; });
+                cx /= totalMass; cz /= totalMass;
+
+                // 計算放置點相對於質心的徑向距離
+                const rdx = hitPoint.x - cx;
+                const rdz = hitPoint.z - cz;
+                const r = Math.sqrt(rdx * rdx + rdz * rdz);
+
+                // 圓軌道切向速度：v_c = sqrt(G * M_total / r)，方向垂直於徑向（XZ 平面逆時針）
+                const vCirc = (r > 0.05) ? Math.sqrt(G_MAIN * totalMass / r) : 0;
+                const vx = -vCirc * (rdz / r);
+                const vz =  vCirc * (rdx / r);
+
+                const newBody = {
+                    m: template.m,
+                    x: hitPoint.x, y: 0, z: hitPoint.z,
+                    vx: vx, vy: 0, vz: vz, // 圓軌道切向速度
+                    ax: 0, ay: 0, az: 0
+                };
+
+                // 同步更新主執行緒鏡像（在 postMessage 之前）
+                mainThreadBodies.push({ m: template.m, x: hitPoint.x, z: hitPoint.z });
+
+                // 更新 Worker
+                worker.postMessage({ type: 'add', body: newBody });
+
+                // 更新視覺
+                createBodyVisual({
+                    name: template.name,
+                    m: template.m,
+                    x: hitPoint.x, y: 0, z: hitPoint.z,
+                    color: template.color,
+                    radius: template.radius
+                });
+
+                // 如果是黑洞，加點特效
+                if (selectedExtremeType === 'bh') {
+                    const ringGeo = new THREE.TorusGeometry(0.5, 0.05, 16, 100);
+                    const ringMat = new THREE.MeshBasicMaterial({ color: 0xffaa00, side: THREE.DoubleSide });
+                    const ring = new THREE.Mesh(ringGeo, ringMat);
+                    ring.rotation.x = Math.PI / 2;
+                    meshes[meshes.length - 1].add(ring);
+                }
+            }
+        });
+
+        // 視窗縮放適應
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // --- 6. 渲染迴圈 ---
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+
+            // 觸發物理引擎計算 (只在前一次計算完成時，避免堵塞訊息佇列)
+            if (!pendingPhysicsUpdate) {
+                pendingPhysicsUpdate = true;
+                const simSpeed = parseInt(speedSlider.value);
+                // speed slider 控制每幀執行多少次物理子步
+                worker.postMessage({ type: 'step', steps: simSpeed });
+            }
+
+            // 讓標籤永遠朝向攝影機 (Sprite 會自動做，但如果使用物件需特別處理。我們用的是 THREE.Sprite，所以自帶 Billboard 屬性)
+
+            renderer.render(scene, camera);
+        }
+
+        animate();
+    </script>
+</body>
+
+</html>
