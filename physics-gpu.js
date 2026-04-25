@@ -27,6 +27,7 @@ struct Dt { cur: u32, next: atomic<u32> };
 var<workgroup> sB: array<Body, WG>;
 var<workgroup> sDtCur: f32;
 var<workgroup> sDtNext: atomic<u32>;
+var<workgroup> swallowedBy: array<i32, WG>;
 
 @compute @workgroup_size(WG)
 fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
@@ -68,12 +69,15 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
         }
         workgroupBarrier();
 
+        // --- 初始化合併追蹤 ---
+        if (i < N) { swallowedBy[i] = -1; }
+        workgroupBarrier();
+
         // --- Accel ---
         if (i < N) {
             let pi = sB[i].pos; let vi = sB[i].vel; let mi = pi.w;
             var acc = vec3f(0.0);
             var mdt = P.BASE_DT;
-            var swallowed = false;
 
             if (mi > 0.0) {
                 for (var j = 0u; j < N; j++) {
@@ -85,12 +89,12 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
                     let d2 = dot(r,r) + P.EPS2;
                     let d = sqrt(d2);
 
-                    // 黑洞吸收邏輯 (Black Hole Absorption)
-                    let Rs = 2.0 * P.G * mj / P.C2;
+                    // 黑洞吸收邏輯 — 使用 max(mi,mj) 計算 Schwarzschild 半徑
+                    let Rs = 2.0 * P.G * max(mi, mj) / P.C2;
                     let R_merge = max(Rs * 1.5, 0.02);
                     if (d < R_merge && (mi < mj || (mi == mj && i > j))) {
-                        swallowed = true;
-                        break; // 被吞噬，終止計算
+                        swallowedBy[i] = i32(j);
+                        break;
                     }
 
                     let id3 = 1.0 / (d2 * d);
@@ -102,34 +106,48 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
 
                     var g = P.G * id3 * mj * r;
 
-                    // 1PN EIH GR (修正後的符號)
+                    // Paczyński-Wiita pseudo-Newtonian potential (strong-field GR)
+                    // Replaces Newton with F = Gm·r / [|r|·(|r| - rs)²]
+                    // Correctly gives ISCO at 3rs, always attractive, no clamp needed
                     if (P.grOn != 0u) {
-                        let vi2 = dot(vi.xyz, vi.xyz); let vj2 = dot(vj.xyz, vj.xyz);
-                        let vdv = dot(vi.xyz, vj.xyz);
-                        let ndvj = dot(r, vj.xyz) / d;
-                        
-                        let t1 = vi2 + 2.0*vj2 - 4.0*vdv - 1.5*ndvj*ndvj - (P.G*mi + 4.0*P.G*mj)/d;
-                        let t2 = dot(r, 4.0*vi.xyz - 3.0*vj.xyz);
-                        let cf = P.G * mj / (P.C2 * d2 * d);
-                        
-                        var gr = cf * (r * t1 - (vi.xyz - vj.xyz) * t2);
-                        
-                        let gm = length(g); let grm = length(gr);
-                        if (grm > 3.0*gm && gm > 0.0) { gr *= 3.0*gm/grm; }
-                        g += gr;
+                        let rs = 2.0 * P.G * mj / P.C2;
+                        let dr = max(d - rs, rs * 0.05 + 1e-10);
+                        g = P.G * mj * r / (d * dr * dr);
                     }
                     acc += g;
                 }
             }
             
-            if (swallowed) {
-                sB[i].pos = vec4f(1e12, 1e12, 1e12, 0.0); // 直接歸零質量並移至遠方
-                sB[i].vel = vec4f(0.0);
-                sB[i].acc = vec4f(0.0);
-            } else if (mi > 0.0) {
+            if (swallowedBy[i] < 0 && mi > 0.0) {
                 sB[i].acc = vec4f(acc, 0.0);
                 atomicMin(&sDtNext, bitcast<u32>(max(mdt, P.MIN_DT)));
             }
+        }
+        workgroupBarrier();
+
+        // --- 質量與動量守恆合併 ---
+        if (i < N && swallowedBy[i] < 0 && sB[i].pos.w > 0.0) {
+            var totalM = sB[i].pos.w;
+            var totalP = sB[i].vel.xyz * totalM;
+            for (var k = 0u; k < N; k++) {
+                if (swallowedBy[k] == i32(i)) {
+                    let km = sB[k].pos.w;
+                    totalP += sB[k].vel.xyz * km;
+                    totalM += km;
+                }
+            }
+            if (totalM > sB[i].pos.w) {
+                sB[i].pos.w = totalM;
+                sB[i].vel = vec4f(totalP / totalM, 0.0);
+            }
+        }
+        workgroupBarrier();
+
+        // --- 清除被吞噬天體 ---
+        if (i < N && swallowedBy[i] >= 0) {
+            sB[i].pos = vec4f(1e12, 1e12, 1e12, 0.0);
+            sB[i].vel = vec4f(0.0);
+            sB[i].acc = vec4f(0.0);
         }
         workgroupBarrier();
 
@@ -187,19 +205,9 @@ fn initAccel(@builtin(local_invocation_id) lid: vec3u) {
         var g = P.G * id3 * mj * r;
 
         if (P.grOn != 0u) {
-            let vi2 = dot(vi.xyz, vi.xyz); let vj2 = dot(vj.xyz, vj.xyz);
-            let vdv = dot(vi.xyz, vj.xyz);
-            let ndvj = dot(r, vj.xyz) / d;
-            
-            let t1 = vi2 + 2.0*vj2 - 4.0*vdv - 1.5*ndvj*ndvj - (P.G*mi + 4.0*P.G*mj)/d;
-            let t2 = dot(r, 4.0*vi.xyz - 3.0*vj.xyz);
-            let cf = P.G * mj / (P.C2 * d2 * d);
-            
-            var gr = cf * (r * t1 - (vi.xyz - vj.xyz) * t2);
-            
-            let gm = length(g); let grm = length(gr);
-            if (grm > 3.0*gm && gm > 0.0) { gr *= 3.0*gm/grm; }
-            g += gr;
+            let rs = 2.0 * P.G * mj / P.C2;
+            let dr = max(d - rs, rs * 0.05 + 1e-10);
+            g = P.G * mj * r / (d * dr * dr);
         }
         acc += g;
     }

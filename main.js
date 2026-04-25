@@ -182,9 +182,11 @@ function updateSettings() {
 grToggle.addEventListener('change', updateSettings);
 cScaleSlider.addEventListener('input', updateSettings);
 
-// 放置天體
+// 放置天體 — 使用佇列避免與進行中的 step() 產生競態條件
 const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
+const pendingAdds = []; // 佇列：等待物理引擎空閒時再加入
+
 window.addEventListener('click', e => {
     if (interactionMode !== 'place') return;
     if (e.target.closest('#ui-layer > div')) return;
@@ -196,22 +198,32 @@ window.addEventListener('click', e => {
         const hp = hits[0].point;
         const tmpl = EXTREME[selectedExtremeType];
         let tM=0, cx=0, cz=0;
-        mainThreadBodies.forEach(b => { tM+=b.m; cx+=b.m*b.x; cz+=b.m*b.z; });
-        cx/=tM; cz/=tM;
+        mainThreadBodies.forEach(b => { if(b.m>0){ tM+=b.m; cx+=b.m*b.x; cz+=b.m*b.z; } });
+        if (tM > 0) { cx/=tM; cz/=tM; }
         const rdx=hp.x-cx, rdz=hp.z-cz, r=Math.sqrt(rdx*rdx+rdz*rdz);
         const vc = r>0.05 ? Math.sqrt(G_MAIN*tM/r) : 0;
         const vx=-vc*(rdz/r), vz=vc*(rdx/r);
         const body = { m:tmpl.m, x:hp.x, y:0, z:hp.z, vx, vy:0, vz, ax:0, ay:0, az:0 };
-        mainThreadBodies.push({ m:tmpl.m, x:hp.x, z:hp.z });
-        physics.addBody(body);
-        createBodyVisual({ name:tmpl.name, m:tmpl.m, x:hp.x, y:0, z:hp.z, color:tmpl.color, radius:tmpl.radius });
-        if (selectedExtremeType==='bh') {
+        const visual = { name:tmpl.name, m:tmpl.m, x:hp.x, y:0, z:hp.z, color:tmpl.color, radius:tmpl.radius };
+        const isBH = selectedExtremeType === 'bh';
+        pendingAdds.push({ body, visual, isBH });
+    }
+});
+
+// 在物理引擎空閒時處理待加入的天體
+async function processPendingAdds() {
+    while (pendingAdds.length > 0) {
+        const { body, visual, isBH } = pendingAdds.shift();
+        await physics.addBody(body);
+        mainThreadBodies.push({ m:body.m, x:body.x, z:body.z });
+        createBodyVisual(visual);
+        if (isBH) {
             const ring = new THREE.Mesh(new THREE.TorusGeometry(0.5,0.05,16,100), new THREE.MeshBasicMaterial({color:0xffaa00,side:THREE.DoubleSide}));
             ring.rotation.x = Math.PI/2;
             meshes[meshes.length-1].add(ring);
         }
     }
-});
+}
 
 window.addEventListener('resize', () => {
     camera.aspect = innerWidth/innerHeight;
@@ -221,15 +233,31 @@ window.addEventListener('resize', () => {
 
 // ────────────────── 6. 渲染迴圈 ──────────────────
 function updateVisuals(positions, masses) {
-    for (let i = 0; i < meshes.length; i++) {
-        // 跳過已消亡的天體
+    // 只更新 positions 陣列所涵蓋的天體數量，避免讀取超出範圍
+    const posCount = Math.floor(positions.length / 3);
+    const count = Math.min(meshes.length, posCount);
+    for (let i = 0; i < count; i++) {
+        // 跳過已消亡的天體（mass 確認為 0）
         if (masses && masses[i] === 0) {
             meshes[i].visible = false;
             trails[i].line.visible = false;
             if (i < mainThreadBodies.length) mainThreadBodies[i].m = 0;
             continue;
         }
+        // 恢復可能被誤判為消亡的天體的可見性
+        if (!meshes[i].visible) {
+            meshes[i].visible = true;
+            trails[i].line.visible = true;
+        }
         const px=positions[i*3], py=positions[i*3+1], pz=positions[i*3+2];
+        // 防止 NaN / Infinity 座標導致視覺消失
+        if (!isFinite(px) || !isFinite(py) || !isFinite(pz)) continue;
+        // 同步位置與質量到 mainThreadBodies，確保放置新天體時使用當前位置
+        if (i < mainThreadBodies.length) {
+            mainThreadBodies[i].x = px;
+            mainThreadBodies[i].z = pz;
+            if (masses) mainThreadBodies[i].m = masses[i];
+        }
         meshes[i].position.set(px, py, pz);
         const t = trails[i]; t.skip++;
         if (t.skip > 2) {
@@ -253,14 +281,19 @@ function animate() {
     requestAnimationFrame(animate);
     controls.update();
     
-    // 移除 PHYSICS_EVERY_N_FRAMES 限制，讓 GPU 計算發揮全力，達到 60Hz 以上的滑順視覺
     if (!pending && physics) {
-        pending = true;
-        const steps = parseInt(speedSlider.value);
-        physics.step(steps).then(result => {
-            updateVisuals(result.positions, result.masses);
-            pending = false;
-        });
+        // 先處理待加入的天體（確保物理與視覺同步後再進行下一步模擬）
+        if (pendingAdds.length > 0) {
+            pending = true;
+            processPendingAdds().then(() => { pending = false; });
+        } else {
+            pending = true;
+            const steps = parseInt(speedSlider.value);
+            physics.step(steps).then(result => {
+                updateVisuals(result.positions, result.masses);
+                pending = false;
+            });
+        }
     }
     renderer.render(scene, camera);
 }

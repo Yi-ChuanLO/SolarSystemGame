@@ -56,19 +56,21 @@ function computeAccelerations() {
             const distSq = dx*dx + dy*dy + dz*dz + EPSILON_SQ;
             const dist = Math.sqrt(distSq);
 
-            // 黑洞吸收邏輯 (Black Hole Absorption)
+            // 黑洞吸收邏輯 (Black Hole Absorption) — 含質量與動量守恆
             const Rs = 2.0 * G * Math.max(bi.m, bj.m) / C2;
             const R_merge = Math.max(Rs * 1.5, 0.02);
             if (dist < R_merge) {
-                if (bi.m <= bj.m) {
-                    bi.m = 0; bi.x = 1e12; bi.y = 1e12; bi.z = 1e12;
-                    bi.vx = 0; bi.vy = 0; bi.vz = 0;
-                    bi.ax = 0; bi.ay = 0; bi.az = 0;
-                } else {
-                    bj.m = 0; bj.x = 1e12; bj.y = 1e12; bj.z = 1e12;
-                    bj.vx = 0; bj.vy = 0; bj.vz = 0;
-                    bj.ax = 0; bj.ay = 0; bj.az = 0;
-                }
+                let survivor, victim;
+                if (bi.m <= bj.m) { survivor = bj; victim = bi; }
+                else                { survivor = bi; victim = bj; }
+                const totalM = survivor.m + victim.m;
+                survivor.vx = (survivor.m*survivor.vx + victim.m*victim.vx) / totalM;
+                survivor.vy = (survivor.m*survivor.vy + victim.m*victim.vy) / totalM;
+                survivor.vz = (survivor.m*survivor.vz + victim.m*victim.vz) / totalM;
+                survivor.m = totalM;
+                victim.m = 0; victim.x = 1e12; victim.y = 1e12; victim.z = 1e12;
+                victim.vx = 0; victim.vy = 0; victim.vz = 0;
+                victim.ax = 0; victim.ay = 0; victim.az = 0;
                 continue;
             }
 
@@ -83,31 +85,20 @@ function computeAccelerations() {
             let axi = f*bj.m*dx, ayi = f*bj.m*dy, azi = f*bj.m*dz;
             let axj = -f*bi.m*dx, ayj = -f*bi.m*dy, azj = -f*bi.m*dz;
 
+            // Paczyński-Wiita pseudo-Newtonian potential (strong-field GR)
+            // Replaces Newton with F = Gm·r / [|r|·(|r| - rs)²], always attractive
             if (enableGR) {
-                const vix=bi.vx, viy=bi.vy, viz=bi.vz, vjx=bj.vx, vjy=bj.vy, vjz=bj.vz;
-                const vi2 = vix*vix+viy*viy+viz*viz, vj2 = vjx*vjx+vjy*vjy+vjz*vjz;
-                const vidvj = vix*vjx+viy*vjy+viz*vjz;
-                const rdvj = dx*vjx+dy*vjy+dz*vjz;
+                // Force on i due to j: rs based on mj
+                const rs_j = 2 * G * bj.m / C2;
+                const dr_j = Math.max(dist - rs_j, rs_j * 0.05 + 1e-10);
+                const pw_j = G * bj.m / (dist * dr_j * dr_j);
+                axi = pw_j * dx; ayi = pw_j * dy; azi = pw_j * dz;
 
-                // Body i correction (修正符號)
-                const t1i = vi2 + 2*vj2 - 4*vidvj - 1.5*(rdvj/dist)*(rdvj/dist) - (G*bi.m+4*G*bj.m)/dist;
-                const t2i = dx*(4*vix-3*vjx)+dy*(4*viy-3*vjy)+dz*(4*viz-3*vjz);
-                const ci = (G*bj.m)/(C2*distSq*dist);
-                let gxi=ci*(dx*t1i-(vix-vjx)*t2i), gyi=ci*(dy*t1i-(viy-vjy)*t2i), gzi=ci*(dz*t1i-(viz-vjz)*t2i);
-                const nmi = Math.sqrt(axi*axi+ayi*ayi+azi*azi), gmi = Math.sqrt(gxi*gxi+gyi*gyi+gzi*gzi);
-                if (gmi > 3*nmi && nmi > 0) { const c=nmi/gmi; gxi*=c; gyi*=c; gzi*=c; }
-                axi+=gxi; ayi+=gyi; azi+=gzi;
-
-                // Body j correction (修正符號)
-                const rx=-dx, ry=-dy, rz=-dz;
-                const rdvi = rx*vix+ry*viy+rz*viz;
-                const t1j = vj2 + 2*vi2 - 4*vidvj - 1.5*(rdvi/dist)*(rdvi/dist) - (G*bj.m+4*G*bi.m)/dist;
-                const t2j = rx*(4*vjx-3*vix)+ry*(4*vjy-3*viy)+rz*(4*vjz-3*viz);
-                const cj = (G*bi.m)/(C2*distSq*dist);
-                let gxj=cj*(rx*t1j-(vjx-vix)*t2j), gyj=cj*(ry*t1j-(vjy-viy)*t2j), gzj=cj*(rz*t1j-(vjz-viz)*t2j);
-                const nmj = Math.sqrt(axj*axj+ayj*ayj+azj*azj), gmj = Math.sqrt(gxj*gxj+gyj*gyj+gzj*gzj);
-                if (gmj > 3*nmj && nmj > 0) { const c=nmj/gmj; gxj*=c; gyj*=c; gzj*=c; }
-                axj+=gxj; ayj+=gyj; azj+=gzj;
+                // Force on j due to i: rs based on mi
+                const rs_i = 2 * G * bi.m / C2;
+                const dr_i = Math.max(dist - rs_i, rs_i * 0.05 + 1e-10);
+                const pw_i = G * bi.m / (dist * dr_i * dr_i);
+                axj = -pw_i * dx; ayj = -pw_i * dy; azj = -pw_i * dz;
             }
             bi.ax+=axi; bi.ay+=ayi; bi.az+=azi;
             bj.ax+=axj; bj.ay+=ayj; bj.az+=azj;
@@ -125,7 +116,7 @@ function verletStep() {
         if (b.m === 0) continue;
         b.vx += 0.5*b.ax*dt; b.vy += 0.5*b.ay*dt; b.vz += 0.5*b.az*dt;
         b.x += b.vx*dt; b.y += b.vy*dt; b.z += b.vz*dt;
-        if (!isFinite(b.x)||!isFinite(b.vx)) { b.x=b.y=b.z=0; b.vx=b.vy=b.vz=0; b.ax=b.ay=b.az=0; }
+        if (!isFinite(b.x)||!isFinite(b.vx)) { b.m=0; b.x=1e12; b.y=1e12; b.z=1e12; b.vx=b.vy=b.vz=0; b.ax=b.ay=b.az=0; }
     }
     computeAccelerations();
     for (let i = 0; i < N; i++) {
