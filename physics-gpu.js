@@ -89,12 +89,15 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
                     let d2 = dot(r,r) + P.EPS2;
                     let d = sqrt(d2);
 
-                    // 黑洞吸收邏輯 — 使用 max(mi,mj) 計算 Schwarzschild 半徑
                     let Rs = 2.0 * P.G * max(mi, mj) / P.C2;
                     let R_merge = max(3.0 * Rs, sqrt(P.EPS2));
-                    if (d < R_merge && (mi < mj || (mi == mj && i > j))) {
-                        swallowedBy[i] = i32(j);
-                        break;
+                    if (d < R_merge) {
+                        if (mi < mj || (mi == mj && i > j)) {
+                            swallowedBy[i] = i32(j);
+                            break;
+                        } else {
+                            continue; // Skip force calculation for swallower to prevent huge acc spike
+                        }
                     }
 
                     let id3 = 1.0 / (d2 * d);
@@ -129,16 +132,17 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
         // Pointer-jumping: 每次迭代將指標跳到 target 的 target
         // log2(64)=6 次迭代可解析最長 64 的鏈
         for (var pj_iter = 0u; pj_iter < 6u; pj_iter++) {
-            workgroupBarrier();
+            var next_val = -1;
             if (i < N && swallowedBy[i] >= 0) {
                 let mid = swallowedBy[i];
-                let next = swallowedBy[u32(mid)];
-                if (next >= 0) {
-                    swallowedBy[i] = next;
-                }
+                next_val = swallowedBy[u32(mid)];
             }
+            workgroupBarrier();
+            if (i < N && next_val >= 0) {
+                swallowedBy[i] = next_val;
+            }
+            workgroupBarrier();
         }
-        workgroupBarrier();
 
         // --- 質量與動量守恆合併 ---
         if (i < N && swallowedBy[i] < 0 && sB[i].pos.w > 0.0) {
@@ -217,6 +221,11 @@ fn initAccel(@builtin(local_invocation_id) lid: vec3u) {
         let r = pj.xyz - pi.xyz;
         let d2 = dot(r,r) + P.EPS2;
         let d = sqrt(d2);
+
+        let Rs = 2.0 * P.G * max(mi, mj) / P.C2;
+        let R_merge = max(3.0 * Rs, sqrt(P.EPS2));
+        if (d < R_merge) { continue; } // Skip initial accel for merging bodies
+
         let id3 = 1.0 / (d2 * d);
 
         mdt = min(mdt, P.ETA * sqrt(d * d2 / (P.G * (mi+mj))));
