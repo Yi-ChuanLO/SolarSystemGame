@@ -21,6 +21,7 @@ self.onmessage = function(e) {
     if (data.type === 'init') {
         bodies = data.bodies;
         computeAccelerations();
+        self.postMessage({ type: 'ready' });
     } else if (data.type === 'update_settings') {
         enableGR = data.enableGR;
         cValue = TRUE_C * data.cScale;
@@ -28,6 +29,7 @@ self.onmessage = function(e) {
     } else if (data.type === 'add') {
         bodies.push(data.body);
         computeAccelerations();
+        self.postMessage({ type: 'added' });
     } else if (data.type === 'step') {
         for (let s = 0; s < data.steps; s++) verletStep();
         const positions = new Float32Array(bodies.length * 3);
@@ -47,6 +49,10 @@ function computeAccelerations() {
     for (let i = 0; i < N; i++) { bodies[i].ax = 0; bodies[i].ay = 0; bodies[i].az = 0; }
     let safeDt = BASE_DT;
 
+    // ── Phase 1: 計算所有力 + 偵測合併 (基於一致的狀態快照) ──
+    const mergeTargets = new Int32Array(N);
+    mergeTargets.fill(-1);
+
     for (let i = 0; i < N; i++) {
         if (bodies[i].m === 0) continue;
         for (let j = i + 1; j < N; j++) {
@@ -56,22 +62,13 @@ function computeAccelerations() {
             const distSq = dx*dx + dy*dy + dz*dz + EPSILON_SQ;
             const dist = Math.sqrt(distSq);
 
-            // 黑洞吸收邏輯 (Black Hole Absorption) — 含質量與動量守恆
+            // 合併偵測 — 標記但不立即執行，確保力計算一致性
             const Rs = 2.0 * G * Math.max(bi.m, bj.m) / C2;
-            const R_merge = Math.max(Rs * 1.5, 0.02);
+            const R_merge = Math.max(3.0 * Rs, Math.sqrt(EPSILON_SQ));
             if (dist < R_merge) {
-                let survivor, victim;
-                if (bi.m <= bj.m) { survivor = bj; victim = bi; }
-                else                { survivor = bi; victim = bj; }
-                const totalM = survivor.m + victim.m;
-                survivor.vx = (survivor.m*survivor.vx + victim.m*victim.vx) / totalM;
-                survivor.vy = (survivor.m*survivor.vy + victim.m*victim.vy) / totalM;
-                survivor.vz = (survivor.m*survivor.vz + victim.m*victim.vz) / totalM;
-                survivor.m = totalM;
-                victim.m = 0; victim.x = 1e12; victim.y = 1e12; victim.z = 1e12;
-                victim.vx = 0; victim.vy = 0; victim.vz = 0;
-                victim.ax = 0; victim.ay = 0; victim.az = 0;
-                continue;
+                if (bi.m <= bj.m) { if (mergeTargets[i] < 0) mergeTargets[i] = j; }
+                else              { if (mergeTargets[j] < 0) mergeTargets[j] = i; }
+                continue; // 合併中的天體跳過力計算
             }
 
             // 雙準則自適應步長
@@ -86,15 +83,12 @@ function computeAccelerations() {
             let axj = -f*bi.m*dx, ayj = -f*bi.m*dy, azj = -f*bi.m*dz;
 
             // Paczyński-Wiita pseudo-Newtonian potential (strong-field GR)
-            // Replaces Newton with F = Gm·r / [|r|·(|r| - rs)²], always attractive
             if (enableGR) {
-                // Force on i due to j: rs based on mj
                 const rs_j = 2 * G * bj.m / C2;
                 const dr_j = Math.max(dist - rs_j, rs_j * 0.05 + 1e-10);
                 const pw_j = G * bj.m / (dist * dr_j * dr_j);
                 axi = pw_j * dx; ayi = pw_j * dy; azi = pw_j * dz;
 
-                // Force on j due to i: rs based on mi
                 const rs_i = 2 * G * bi.m / C2;
                 const dr_i = Math.max(dist - rs_i, rs_i * 0.05 + 1e-10);
                 const pw_i = G * bi.m / (dist * dr_i * dr_i);
@@ -104,6 +98,48 @@ function computeAccelerations() {
             bj.ax+=axj; bj.ay+=ayj; bj.az+=azj;
         }
     }
+
+    // ── Phase 2: 解析合併鏈 (A→B→C 展開至鏈末端存活者) ──
+    for (let i = 0; i < N; i++) {
+        if (mergeTargets[i] < 0) continue;
+        let target = mergeTargets[i];
+        while (mergeTargets[target] >= 0) target = mergeTargets[target];
+        mergeTargets[i] = target;
+    }
+
+    // ── Phase 3: 執行合併 (質量與動量守恆) ──
+    for (let i = 0; i < N; i++) {
+        if (mergeTargets[i] >= 0) continue; // 跳過被吞噬者
+        if (bodies[i].m === 0) continue;
+        let totalM = bodies[i].m;
+        let tpx = bodies[i].m * bodies[i].vx;
+        let tpy = bodies[i].m * bodies[i].vy;
+        let tpz = bodies[i].m * bodies[i].vz;
+        for (let k = 0; k < N; k++) {
+            if (mergeTargets[k] === i) {
+                totalM += bodies[k].m;
+                tpx += bodies[k].m * bodies[k].vx;
+                tpy += bodies[k].m * bodies[k].vy;
+                tpz += bodies[k].m * bodies[k].vz;
+            }
+        }
+        if (totalM > bodies[i].m) {
+            bodies[i].vx = tpx / totalM;
+            bodies[i].vy = tpy / totalM;
+            bodies[i].vz = tpz / totalM;
+            bodies[i].m = totalM;
+        }
+    }
+
+    // ── Phase 4: 清除被吞噬天體 ──
+    for (let i = 0; i < N; i++) {
+        if (mergeTargets[i] >= 0) {
+            bodies[i].m = 0; bodies[i].x = 1e12; bodies[i].y = 1e12; bodies[i].z = 1e12;
+            bodies[i].vx = 0; bodies[i].vy = 0; bodies[i].vz = 0;
+            bodies[i].ax = 0; bodies[i].ay = 0; bodies[i].az = 0;
+        }
+    }
+
     let targetDt = Math.max(safeDt, MIN_DT);
     nextSafeDt = Math.max(nextSafeDt * 0.5, Math.min(targetDt, nextSafeDt * 1.1));
 }

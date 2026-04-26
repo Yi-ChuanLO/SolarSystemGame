@@ -29,7 +29,7 @@ const physicsState = initialBodiesData.map(b => ({ m:b.m, x:b.x, y:b.y, z:b.z, v
     physicsState.forEach(b => { b.vx-=cx; b.vy-=cy; b.vz-=cz; });
 }
 
-let mainThreadBodies = initialBodiesData.map(b => ({ m:b.m, x:b.x, z:b.z }));
+let mainThreadBodies = initialBodiesData.map(b => ({ m:b.m, x:b.x, y:b.y||0, z:b.z }));
 
 // ────────────────── 2. Three.js 場景 ──────────────────
 const container = document.getElementById('canvas-container');
@@ -84,9 +84,17 @@ initialBodiesData.forEach(createBodyVisual);
 
 // Worker fallback 封裝
 class WorkerPhysics {
-    constructor() { this.worker=null; this._resolve=null; }
+    constructor() { this.worker=null; this._resolve=null; this._addResolve=null; }
     async init(bodies) {
         this.worker = new Worker('physics-worker.js');
+        // 等待 Worker 完成初始化（含加速度計算）後再繼續
+        await new Promise(resolve => {
+            this.worker.onmessage = e => {
+                if (e.data.type === 'ready') resolve();
+            };
+            this.worker.postMessage({ type:'init', bodies });
+        });
+        // 切換到正常訊息處理器
         this.worker.onmessage = e => {
             if (e.data.type==='update' && this._resolve) {
                 this._resolve({
@@ -94,12 +102,14 @@ class WorkerPhysics {
                     masses: e.data.masses ? new Float32Array(e.data.masses) : null
                 });
                 this._resolve = null;
+            } else if (e.data.type==='added' && this._addResolve) {
+                this._addResolve();
+                this._addResolve = null;
             }
         };
-        this.worker.postMessage({ type:'init', bodies });
     }
     step(n) { return new Promise(r => { this._resolve=r; this.worker.postMessage({type:'step',steps:n}); }); }
-    addBody(b) { this.worker.postMessage({type:'add',body:b}); }
+    addBody(b) { return new Promise(r => { this._addResolve=r; this.worker.postMessage({type:'add',body:b}); }); }
     updateSettings(s) { this.worker.postMessage({type:'update_settings',...s}); }
 }
 
@@ -215,7 +225,7 @@ async function processPendingAdds() {
     while (pendingAdds.length > 0) {
         const { body, visual, isBH } = pendingAdds.shift();
         await physics.addBody(body);
-        mainThreadBodies.push({ m:body.m, x:body.x, z:body.z });
+        mainThreadBodies.push({ m:body.m, x:body.x, y:body.y||0, z:body.z });
         createBodyVisual(visual);
         if (isBH) {
             const ring = new THREE.Mesh(new THREE.TorusGeometry(0.5,0.05,16,100), new THREE.MeshBasicMaterial({color:0xffaa00,side:THREE.DoubleSide}));
@@ -239,6 +249,20 @@ function updateVisuals(positions, masses) {
     for (let i = 0; i < count; i++) {
         // 跳過已消亡的天體（mass 確認為 0）
         if (masses && masses[i] === 0) {
+            // 首次消亡時釋放 GPU 資源
+            if (meshes[i].visible) {
+                meshes[i].traverse(child => {
+                    if (child.geometry) child.geometry.dispose();
+                    if (child.material) {
+                        if (child.material.map) child.material.map.dispose();
+                        child.material.dispose();
+                    }
+                });
+                scene.remove(meshes[i]);
+                trails[i].line.geometry.dispose();
+                trails[i].line.material.dispose();
+                scene.remove(trails[i].line);
+            }
             meshes[i].visible = false;
             trails[i].line.visible = false;
             if (i < mainThreadBodies.length) mainThreadBodies[i].m = 0;
@@ -255,6 +279,7 @@ function updateVisuals(positions, masses) {
         // 同步位置與質量到 mainThreadBodies，確保放置新天體時使用當前位置
         if (i < mainThreadBodies.length) {
             mainThreadBodies[i].x = px;
+            mainThreadBodies[i].y = py;
             mainThreadBodies[i].z = pz;
             if (masses) mainThreadBodies[i].m = masses[i];
         }
@@ -262,11 +287,8 @@ function updateVisuals(positions, masses) {
         const t = trails[i]; t.skip++;
         if (t.skip > 2) {
             t.skip = 0;
-            for (let j = MAX_TRAIL-1; j > 0; j--) {
-                t.positions[j*3]=t.positions[(j-1)*3];
-                t.positions[j*3+1]=t.positions[(j-1)*3+1];
-                t.positions[j*3+2]=t.positions[(j-1)*3+2];
-            }
+            // 使用原生 copyWithin 取代手動迴圈，效能更佳
+            t.positions.copyWithin(3, 0, (MAX_TRAIL - 1) * 3);
             t.positions[0]=px; t.positions[1]=py; t.positions[2]=pz;
             if (t.count < MAX_TRAIL) t.count++;
             t.line.geometry.setDrawRange(0, t.count);

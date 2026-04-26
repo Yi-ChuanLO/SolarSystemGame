@@ -91,7 +91,7 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
 
                     // 黑洞吸收邏輯 — 使用 max(mi,mj) 計算 Schwarzschild 半徑
                     let Rs = 2.0 * P.G * max(mi, mj) / P.C2;
-                    let R_merge = max(Rs * 1.5, 0.02);
+                    let R_merge = max(3.0 * Rs, sqrt(P.EPS2));
                     if (d < R_merge && (mi < mj || (mi == mj && i > j))) {
                         swallowedBy[i] = i32(j);
                         break;
@@ -121,6 +121,21 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
             if (swallowedBy[i] < 0 && mi > 0.0) {
                 sB[i].acc = vec4f(acc, 0.0);
                 atomicMin(&sDtNext, bitcast<u32>(max(mdt, P.MIN_DT)));
+            }
+        }
+        workgroupBarrier();
+
+        // --- 解析鏈式合併指標 (Chain Merger Resolution) ---
+        // Pointer-jumping: 每次迭代將指標跳到 target 的 target
+        // log2(64)=6 次迭代可解析最長 64 的鏈
+        for (var pj_iter = 0u; pj_iter < 6u; pj_iter++) {
+            workgroupBarrier();
+            if (i < N && swallowedBy[i] >= 0) {
+                let mid = swallowedBy[i];
+                let next = swallowedBy[u32(mid)];
+                if (next >= 0) {
+                    swallowedBy[i] = next;
+                }
             }
         }
         workgroupBarrier();
@@ -189,9 +204,16 @@ fn initAccel(@builtin(local_invocation_id) lid: vec3u) {
     var acc = vec3f(0.0);
     var mdt = P.BASE_DT;
 
+    // 跳過死亡天體 (m=0)，避免無意義計算與除零風險
+    if (mi == 0.0) {
+        B[i].acc = vec4f(0.0);
+        return;
+    }
+
     for (var j = 0u; j < N; j++) {
         if (j == i) { continue; }
         let pj = B[j].pos; let vj = B[j].vel; let mj = pj.w;
+        if (mj == 0.0) { continue; }  // 跳過死亡天體
         let r = pj.xyz - pi.xyz;
         let d2 = dot(r,r) + P.EPS2;
         let d = sqrt(d2);
@@ -229,6 +251,9 @@ export class WebGPUPhysics {
         this.N = 0;
         this._enableGR = false;
         this._C2 = 63239.7263 * 63239.7263;
+        // 預分配輸出緩衝區，避免每幀 GC 壓力
+        this._posOut = new Float32Array(MAX_BODIES * 3);
+        this._massOut = new Float32Array(MAX_BODIES);
     }
 
     async init(bodies) {
@@ -315,19 +340,22 @@ export class WebGPUPhysics {
         enc.copyBufferToBuffer(this.bodyBuf, 0, this.readBuf, 0, byteLen);
         this.device.queue.submit([enc.finish()]);
 
-        await this.readBuf.mapAsync(GPUMapMode.READ);
+        try {
+            await this.readBuf.mapAsync(GPUMapMode.READ);
+        } catch (e) {
+            console.error('GPU readback failed:', e);
+            return { positions: this._posOut.subarray(0, this.N * 3), masses: this._massOut.subarray(0, this.N) };
+        }
         const raw = new Float32Array(this.readBuf.getMappedRange().slice(0));
         this.readBuf.unmap();
 
-        const pos = new Float32Array(this.N * 3);
-        const masses = new Float32Array(this.N);
         for (let i = 0; i < this.N; i++) {
-            pos[i*3]   = raw[i*12];
-            pos[i*3+1] = raw[i*12+1];
-            pos[i*3+2] = raw[i*12+2];
-            masses[i]  = raw[i*12+3];
+            this._posOut[i*3]   = raw[i*12];
+            this._posOut[i*3+1] = raw[i*12+1];
+            this._posOut[i*3+2] = raw[i*12+2];
+            this._massOut[i]    = raw[i*12+3];
         }
-        return { positions: pos, masses };
+        return { positions: this._posOut.subarray(0, this.N * 3), masses: this._massOut.subarray(0, this.N) };
     }
 
     async addBody(body) {
