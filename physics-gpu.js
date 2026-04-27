@@ -39,7 +39,6 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
         sB[i] = B[i];
     }
     if (i == 0) {
-        sDtCur = bitcast<f32>(dt.cur);
         atomicStore(&sDtNext, atomicLoad(&dt.next));
     }
     workgroupBarrier();
@@ -89,7 +88,7 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
                     let d2 = dot(r,r) + P.EPS2;
                     let d = sqrt(d2);
 
-                    let Rs = 2.0 * P.G * max(mi, mj) / P.C2;
+                    let Rs = 2.0 * P.G * (mi + mj) / P.C2;
                     let R_merge = max(3.0 * Rs, sqrt(P.EPS2));
                     if (d < R_merge) {
                         if (mi < mj || (mi == mj && i > j)) {
@@ -109,11 +108,10 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
 
                     var g = P.G * id3 * mj * r;
 
-                    // Paczyński-Wiita pseudo-Newtonian potential (strong-field GR)
-                    // Replaces Newton with F = Gm·r / [|r|·(|r| - rs)²]
-                    // Correctly gives ISCO at 3rs, always attractive, no clamp needed
+                    // 修正：對稱版 Paczyński-Wiita 勢能 (Symmetric PW potential)
+                    // 使用系統總質量 (mi+mj) 計算 Schwarzschild 半徑，確保符合牛頓第三運動定律 (動量守恆)
                     if (P.grOn != 0u) {
-                        let rs = 2.0 * P.G * mj / P.C2;
+                        let rs = 2.0 * P.G * (mi + mj) / P.C2;
                         let dr = max(d - rs, rs * 0.05 + 1e-10);
                         g = P.G * mj * r / (d * dr * dr);
                     }
@@ -148,15 +146,17 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
         if (i < N && swallowedBy[i] < 0 && sB[i].pos.w > 0.0) {
             var totalM = sB[i].pos.w;
             var totalP = sB[i].vel.xyz * totalM;
+            var totalPos = sB[i].pos.xyz * totalM;
             for (var k = 0u; k < N; k++) {
                 if (swallowedBy[k] == i32(i)) {
                     let km = sB[k].pos.w;
                     totalP += sB[k].vel.xyz * km;
+                    totalPos += sB[k].pos.xyz * km;
                     totalM += km;
                 }
             }
             if (totalM > sB[i].pos.w) {
-                sB[i].pos.w = totalM;
+                sB[i].pos = vec4f(totalPos / totalM, totalM);
                 sB[i].vel = vec4f(totalP / totalM, 0.0);
             }
         }
@@ -164,7 +164,7 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
 
         // --- 清除被吞噬天體 ---
         if (i < N && swallowedBy[i] >= 0) {
-            sB[i].pos = vec4f(1e12, 1e12, 1e12, 0.0);
+            sB[i].pos.w = 0.0; // 僅將質量歸零，保留 xyz 作為死亡座標供主線程讀取
             sB[i].vel = vec4f(0.0);
             sB[i].acc = vec4f(0.0);
         }
@@ -204,11 +204,9 @@ fn initAccel(@builtin(local_invocation_id) lid: vec3u) {
     let N = P.N;
     if (i >= N) { return; }
     
-    let pi = B[i].pos; let vi = B[i].vel; let mi = pi.w;
+    let pi = B[i].pos; let mi = pi.w;
     var acc = vec3f(0.0);
-    var mdt = P.BASE_DT;
 
-    // 跳過死亡天體 (m=0)，避免無意義計算與除零風險
     if (mi == 0.0) {
         B[i].acc = vec4f(0.0);
         return;
@@ -216,34 +214,28 @@ fn initAccel(@builtin(local_invocation_id) lid: vec3u) {
 
     for (var j = 0u; j < N; j++) {
         if (j == i) { continue; }
-        let pj = B[j].pos; let vj = B[j].vel; let mj = pj.w;
-        if (mj == 0.0) { continue; }  // 跳過死亡天體
+        let pj = B[j].pos; let mj = pj.w;
+        if (mj == 0.0) { continue; }
         let r = pj.xyz - pi.xyz;
         let d2 = dot(r,r) + P.EPS2;
         let d = sqrt(d2);
 
-        let Rs = 2.0 * P.G * max(mi, mj) / P.C2;
+        let Rs = 2.0 * P.G * (mi + mj) / P.C2;
         let R_merge = max(3.0 * Rs, sqrt(P.EPS2));
-        if (d < R_merge) { continue; } // Skip initial accel for merging bodies
+        if (d < R_merge) { continue; }
 
         let id3 = 1.0 / (d2 * d);
-
-        mdt = min(mdt, P.ETA * sqrt(d * d2 / (P.G * (mi+mj))));
-        let dv = vi.xyz - vj.xyz;
-        let vr2 = dot(dv,dv);
-        if (vr2 > 1e-30) { mdt = min(mdt, P.ETA * d / sqrt(vr2)); }
 
         var g = P.G * id3 * mj * r;
 
         if (P.grOn != 0u) {
-            let rs = 2.0 * P.G * mj / P.C2;
+            let rs = 2.0 * P.G * (mi + mj) / P.C2;
             let dr = max(d - rs, rs * 0.05 + 1e-10);
             g = P.G * mj * r / (d * dr * dr);
         }
         acc += g;
     }
     B[i].acc = vec4f(acc, 0.0);
-    atomicMin(&dt.next, bitcast<u32>(max(mdt, P.MIN_DT)));
 }
 `;
 
@@ -262,6 +254,7 @@ export class WebGPUPhysics {
         this._C2 = 63239.7263 * 63239.7263;
         // 預分配輸出緩衝區，避免每幀 GC 壓力
         this._posOut = new Float32Array(MAX_BODIES * 3);
+        this._velOut = new Float32Array(MAX_BODIES * 3);
         this._massOut = new Float32Array(MAX_BODIES);
     }
 
@@ -353,7 +346,7 @@ export class WebGPUPhysics {
             await this.readBuf.mapAsync(GPUMapMode.READ);
         } catch (e) {
             console.error('GPU readback failed:', e);
-            return { positions: this._posOut.subarray(0, this.N * 3), masses: this._massOut.subarray(0, this.N) };
+            return { positions: this._posOut.subarray(0, this.N * 3), velocities: this._velOut.subarray(0, this.N * 3), masses: this._massOut.subarray(0, this.N) };
         }
         const raw = new Float32Array(this.readBuf.getMappedRange().slice(0));
         this.readBuf.unmap();
@@ -363,8 +356,11 @@ export class WebGPUPhysics {
             this._posOut[i*3+1] = raw[i*12+1];
             this._posOut[i*3+2] = raw[i*12+2];
             this._massOut[i]    = raw[i*12+3];
+            this._velOut[i*3]   = raw[i*12+4];
+            this._velOut[i*3+1] = raw[i*12+5];
+            this._velOut[i*3+2] = raw[i*12+6];
         }
-        return { positions: this._posOut.subarray(0, this.N * 3), masses: this._massOut.subarray(0, this.N) };
+        return { positions: this._posOut.subarray(0, this.N * 3), velocities: this._velOut.subarray(0, this.N * 3), masses: this._massOut.subarray(0, this.N) };
     }
 
     async addBody(body) {

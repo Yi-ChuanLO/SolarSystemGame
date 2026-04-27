@@ -82,6 +82,30 @@
                         放置模式</button>
                 </div>
 
+                <!-- NEW: Camera Tracking -->
+                <div class="mb-4">
+                    <label class="text-sm font-semibold text-gray-400 mb-2 block" for="camera-target">鎖定視角 (跟隨天體)</label>
+                    <select id="camera-target" class="w-full py-1.5 px-2 bg-white/10 rounded-lg text-sm border border-white/20 text-white focus:outline-none focus:border-blue-500 cursor-pointer appearance-none">
+                        <option value="none" class="bg-gray-800">自由視角 (Free)</option>
+                    </select>
+                </div>
+
+                <!-- NEW: Energy Monitoring -->
+                <div class="mb-4 bg-black/40 p-3 rounded-lg border border-white/10">
+                    <div class="flex justify-between text-xs text-gray-400 mb-1">
+                        <span>系統能量誤差 (ΔE/E₀)</span>
+                        <span id="energy-drift" class="font-mono text-green-400">0.000%</span>
+                    </div>
+                    <div class="flex justify-between text-xs text-gray-500">
+                        <span>動能 K</span>
+                        <span id="energy-k" class="font-mono">0.00</span>
+                    </div>
+                    <div class="flex justify-between text-xs text-gray-500">
+                        <span>位能 U</span>
+                        <span id="energy-u" class="font-mono">0.00</span>
+                    </div>
+                </div>
+
                 <div class="mb-4">
                     <p class="text-sm font-semibold text-gray-400 mb-2">生成極端天體 (點擊畫面放置)</p>
                     <div class="grid grid-cols-1 gap-2">

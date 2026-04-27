@@ -29,7 +29,7 @@ const physicsState = initialBodiesData.map(b => ({ m:b.m, x:b.x, y:b.y, z:b.z, v
     physicsState.forEach(b => { b.vx-=cx; b.vy-=cy; b.vz-=cz; });
 }
 
-let mainThreadBodies = initialBodiesData.map(b => ({ m:b.m, x:b.x, y:b.y||0, z:b.z }));
+let mainThreadBodies = initialBodiesData.map(b => ({ name:b.name, m:b.m, x:b.x, y:b.y||0, z:b.z }));
 
 // ────────────────── 2. Three.js 場景 ──────────────────
 const container = document.getElementById('canvas-container');
@@ -99,6 +99,7 @@ class WorkerPhysics {
             if (e.data.type==='update' && this._resolve) {
                 this._resolve({
                     positions: new Float32Array(e.data.positions),
+                    velocities: e.data.velocities ? new Float32Array(e.data.velocities) : null,
                     masses: e.data.masses ? new Float32Array(e.data.masses) : null
                 });
                 this._resolve = null;
@@ -129,9 +130,18 @@ async function initPhysics() {
             console.warn('⚠️ WebGPU init failed, falling back to Worker:', e);
         }
     }
-    physics = new WorkerPhysics();
-    await physics.init(physicsState);
-    console.log('✅ CPU Worker physics initialized (fallback)');
+    try {
+        physics = new WorkerPhysics();
+        await physics.init(physicsState);
+        backendName = 'CPU Worker';
+        console.log('✅ CPU Worker physics initialized (fallback)');
+    } catch(e) {
+        console.error('❌ All physics backends failed:', e);
+        const desc = document.querySelector('#ui-content p');
+        if (desc) desc.innerHTML = '❌ <span class="text-red-400">物理引擎初始化失敗</span>，請檢查瀏覽器相容性或重新整理頁面。';
+        backendName = 'None';
+        throw e;
+    }
 }
 
 // ────────────────── 5. UI 互動 ──────────────────
@@ -183,7 +193,108 @@ const grToggle = document.getElementById('gr-toggle');
 const cScaleSlider = document.getElementById('c-scale-slider');
 const cScaleDisplay = document.getElementById('c-scale-display');
 
+const cameraTargetSelect = document.getElementById('camera-target');
+
+function updateCameraOptions() {
+    if (!cameraTargetSelect) return;
+    const currentVal = cameraTargetSelect.value;
+    cameraTargetSelect.innerHTML = '<option value="none" class="bg-gray-800">自由視角 (Free)</option>';
+    for (let i = 0; i < mainThreadBodies.length; i++) {
+        if (mainThreadBodies[i].m > 0) {
+            const opt = document.createElement('option');
+            opt.value = i;
+            opt.className = 'bg-gray-800';
+            opt.innerText = mainThreadBodies[i].name || `Body ${i}`;
+            cameraTargetSelect.appendChild(opt);
+        }
+    }
+    if (cameraTargetSelect.querySelector(`option[value="${currentVal}"]`)) {
+        cameraTargetSelect.value = currentVal;
+    } else {
+        cameraTargetSelect.value = 'none';
+    }
+}
+updateCameraOptions();
+
+let initialEnergy = null;
+function calcSystemEnergy(positions, velocities, masses) {
+    if (!velocities) return;
+    let K = 0, U = 0;
+    const G = 4 * Math.PI * Math.PI;
+    const C2 = 63239.7263 * 63239.7263 * Math.pow(10, parseFloat(cScaleSlider.value)*2);
+    const useGR = grToggle.checked;
+    
+    const count = Math.floor(positions.length / 3);
+    for (let i = 0; i < count; i++) {
+        if (masses[i] === 0) continue;
+        const mi = masses[i];
+        const v2 = velocities[i*3]*velocities[i*3] + velocities[i*3+1]*velocities[i*3+1] + velocities[i*3+2]*velocities[i*3+2];
+        K += 0.5 * mi * v2;
+        
+        for (let j = i + 1; j < count; j++) {
+            if (masses[j] === 0) continue;
+            const mj = masses[j];
+            const dx = positions[j*3] - positions[i*3];
+            const dy = positions[j*3+1] - positions[i*3+1];
+            const dz = positions[j*3+2] - positions[i*3+2];
+            const d = Math.sqrt(dx*dx + dy*dy + dz*dz + 1e-10);
+            
+            if (useGR) {
+                const rs = 2 * G * (mi + mj) / C2;
+                const dr = Math.max(d - rs, 1e-10);
+                U -= G * mi * mj / dr;
+            } else {
+                U -= G * mi * mj / d;
+            }
+        }
+    }
+    
+    const E = K + U;
+    if (initialEnergy === null && E !== 0) initialEnergy = E;
+    
+    document.getElementById('energy-k').innerText = K.toExponential(4);
+    document.getElementById('energy-u').innerText = U.toExponential(4);
+    if (initialEnergy !== null && initialEnergy !== 0) {
+        const drift = Math.abs((E - initialEnergy) / initialEnergy) * 100;
+        const driftEl = document.getElementById('energy-drift');
+        driftEl.innerText = drift.toFixed(6) + '%';
+        if (drift > 1) driftEl.className = 'font-mono text-red-400';
+        else if (drift > 0.01) driftEl.className = 'font-mono text-yellow-400';
+        else driftEl.className = 'font-mono text-green-400';
+    }
+}
+
+function spawnMergerVFX(pos) {
+    const light = new THREE.PointLight(0xffaa00, 5, 10);
+    light.position.copy(pos);
+    scene.add(light);
+    
+    const geo = new THREE.SphereGeometry(0.2, 16, 16);
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffaa00, transparent: true, opacity: 1 });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.copy(pos);
+    scene.add(mesh);
+    
+    const startTime = performance.now();
+    function animateVFX() {
+        const t = (performance.now() - startTime) / 500;
+        if (t >= 1) {
+            scene.remove(light);
+            scene.remove(mesh);
+            geo.dispose();
+            mat.dispose();
+            return;
+        }
+        mesh.scale.setScalar(1 + t * 5);
+        mat.opacity = 1 - t;
+        light.intensity = 5 * (1 - t);
+        requestAnimationFrame(animateVFX);
+    }
+    animateVFX();
+}
+
 function updateSettings() {
+    initialEnergy = null;
     const scale = Math.pow(10, parseFloat(cScaleSlider.value));
     cScaleDisplay.innerText = scale.toFixed(3) + 'x';
     cScaleSlider.disabled = !grToggle.checked;
@@ -225,14 +336,16 @@ async function processPendingAdds() {
     while (pendingAdds.length > 0) {
         const { body, visual, isBH } = pendingAdds.shift();
         await physics.addBody(body);
-        mainThreadBodies.push({ m:body.m, x:body.x, y:body.y||0, z:body.z });
+        mainThreadBodies.push({ name:visual.name, m:body.m, x:body.x, y:body.y||0, z:body.z });
         createBodyVisual(visual);
+        updateCameraOptions();
         if (isBH) {
             const ring = new THREE.Mesh(new THREE.TorusGeometry(0.5,0.05,16,100), new THREE.MeshBasicMaterial({color:0xffaa00,side:THREE.DoubleSide}));
             ring.rotation.x = Math.PI/2;
             meshes[meshes.length-1].add(ring);
         }
     }
+    initialEnergy = null; // 重新計算基準能量，避免產生假漂移
 }
 
 window.addEventListener('resize', () => {
@@ -242,6 +355,8 @@ window.addEventListener('resize', () => {
 });
 
 // ────────────────── 6. 渲染迴圈 ──────────────────
+let mergerHappened = false;
+
 function updateVisuals(positions, masses) {
     // 只更新 positions 陣列所涵蓋的天體數量，避免讀取超出範圍
     const posCount = Math.floor(positions.length / 3);
@@ -251,6 +366,11 @@ function updateVisuals(positions, masses) {
         if (masses && masses[i] === 0) {
             // 首次消亡時釋放 GPU 資源
             if (meshes[i].visible) {
+                mergerHappened = true;
+                const deathPos = new THREE.Vector3(positions[i*3], positions[i*3+1], positions[i*3+2]);
+                if (deathPos.x < 1e11) {
+                    spawnMergerVFX(deathPos);
+                }
                 meshes[i].traverse(child => {
                     if (child.geometry) child.geometry.dispose();
                     if (child.material) {
@@ -265,13 +385,13 @@ function updateVisuals(positions, masses) {
             }
             meshes[i].visible = false;
             trails[i].line.visible = false;
-            if (i < mainThreadBodies.length) mainThreadBodies[i].m = 0;
+            if (i < mainThreadBodies.length) {
+                if (mainThreadBodies[i].m !== 0) {
+                    mainThreadBodies[i].m = 0;
+                    updateCameraOptions();
+                }
+            }
             continue;
-        }
-        // 恢復可能被誤判為消亡的天體的可見性
-        if (!meshes[i].visible) {
-            meshes[i].visible = true;
-            trails[i].line.visible = true;
         }
         const px=positions[i*3], py=positions[i*3+1], pz=positions[i*3+2];
         // 防止 NaN / Infinity 座標導致視覺消失
@@ -313,17 +433,36 @@ function animate() {
             const steps = parseInt(speedSlider.value);
             physics.step(steps).then(result => {
                 updateVisuals(result.positions, result.masses);
+                if (mergerHappened) {
+                    initialEnergy = null; // 合併屬非彈性碰撞，總能量會折損，必須重設基準點
+                    mergerHappened = false;
+                }
+                if (result.velocities) calcSystemEnergy(result.positions, result.velocities, result.masses);
                 pending = false;
             });
         }
     }
+
+    if (cameraTargetSelect && cameraTargetSelect.value !== 'none') {
+        const targetIdx = parseInt(cameraTargetSelect.value);
+        if (mainThreadBodies[targetIdx] && mainThreadBodies[targetIdx].m > 0) {
+            const tx = mainThreadBodies[targetIdx].x;
+            const ty = mainThreadBodies[targetIdx].y;
+            const tz = mainThreadBodies[targetIdx].z;
+            controls.target.lerp(new THREE.Vector3(tx, ty, tz), 0.1);
+        } else {
+            cameraTargetSelect.value = 'none';
+        }
+    }
+
     renderer.render(scene, camera);
 }
 
 // ────────────────── 啟動 ──────────────────
 initPhysics().then(() => {
-    // 在 UI 顯示後端資訊
     const desc = document.querySelector('#ui-content p');
     if (desc) desc.innerHTML = `物理後端：<b class="text-green-400">${backendName}</b>｜Velocity Verlet 積分器<br>單位：AU / M☉ / 年`;
     animate();
+}).catch(() => {
+    // 初始化失敗已在上方函數中顯示錯誤訊息
 });
