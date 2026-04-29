@@ -241,7 +241,7 @@ function calcSystemEnergy(positions, velocities, masses) {
             
             if (useGR) {
                 const rs = 2 * G * (mi + mj) / C2;
-                const dr = Math.max(d - rs, 1e-10);
+                const dr = Math.max(d - rs, rs * 0.05 + 1e-10);
                 U -= G * mi * mj / dr;
             } else {
                 U -= G * mi * mj / d;

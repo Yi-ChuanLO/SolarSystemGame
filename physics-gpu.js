@@ -10,6 +10,7 @@ const PARAMS_SIZE = 48; // 12 × f32/u32 (包含 subSteps 與 padding)
 // ────────────────────────── WGSL 著色器 ──────────────────────────
 const WGSL = /* wgsl */`
 const WG: u32 = 64u;
+const KS_FACTOR: f32 = 20.0;  // GPU 側近距交會偵測閾值 (對應 CPU 端 KS 正則化)
 
 struct Body { pos: vec4f, vel: vec4f, acc: vec4f };
 struct Params { 
@@ -93,9 +94,13 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
                     if (d < R_merge) {
                         if (mi < mj || (mi == mj && i > j)) {
                             swallowedBy[i] = i32(j);
+                            // 安全中斷：被吞噬者的加速度不再使用（Phase 4 清零），
+                            // 多重合併目標由 pointer-jumping 鏈式解析（Phase 3）
                             break;
                         } else {
-                            continue; // Skip force calculation for swallower to prevent huge acc spike
+                            // 安全跳過：吞噬者暫時跳過此配對的力計算，
+                            // Phase 5 會基於合併後的質量/位置重算完整加速度
+                            continue;
                         }
                     }
 
@@ -105,6 +110,14 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
                     let dv = vi.xyz - vj.xyz;
                     let vr2 = dot(dv,dv);
                     if (vr2 > 1e-30) { mdt = min(mdt, P.ETA * d / sqrt(vr2)); }
+
+                    // INT-1 修正：GPU 側近距交會增強
+                    // 在 KS 區域 (R_merge < d < KS_FACTOR*R_merge) 使用更激進的步長縮減，
+                    // 等效於 CPU 端 KS 正則化在近心點的密集子步效果
+                    let R_ks = KS_FACTOR * R_merge;
+                    if (d < R_ks) {
+                        mdt = min(mdt, P.ETA * 0.1 * sqrt(d * d2 / (P.G * (mi+mj))));
+                    }
 
                     var g = P.G * id3 * mj * r;
 
@@ -167,6 +180,36 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
             sB[i].pos.w = 0.0; // 僅將質量歸零，保留 xyz 作為死亡座標供主線程讀取
             sB[i].vel = vec4f(0.0);
             sB[i].acc = vec4f(0.0);
+        }
+        workgroupBarrier();
+
+        // --- Phase 5: 合併存活者加速度重算 ---
+        // 避免 Kick 2 使用基於舊質量/位置的過時加速度
+        if (i < N && swallowedBy[i] < 0 && sB[i].pos.w > 0.0) {
+            var didMerge = false;
+            for (var km = 0u; km < N; km++) {
+                if (swallowedBy[km] == i32(i)) { didMerge = true; break; }
+            }
+            if (didMerge) {
+                let pi5 = sB[i].pos; let mi5 = pi5.w;
+                var acc5 = vec3f(0.0);
+                for (var j5 = 0u; j5 < N; j5++) {
+                    if (j5 == i) { continue; }
+                    let pj5 = sB[j5].pos; let mj5 = pj5.w;
+                    if (mj5 == 0.0) { continue; }
+                    let r5 = pj5.xyz - pi5.xyz;
+                    let d2_5 = dot(r5, r5) + P.EPS2;
+                    let d_5 = sqrt(d2_5);
+                    var g5 = P.G * mj5 * r5 / (d2_5 * d_5);
+                    if (P.grOn != 0u) {
+                        let rs5 = 2.0 * P.G * (mi5 + mj5) / P.C2;
+                        let dr5 = max(d_5 - rs5, rs5 * 0.05 + 1e-10);
+                        g5 = P.G * mj5 * r5 / (d_5 * dr5 * dr5);
+                    }
+                    acc5 += g5;
+                }
+                sB[i].acc = vec4f(acc5, 0.0);
+            }
         }
         workgroupBarrier();
 
@@ -342,6 +385,8 @@ export class WebGPUPhysics {
         enc.copyBufferToBuffer(this.bodyBuf, 0, this.readBuf, 0, byteLen);
         this.device.queue.submit([enc.finish()]);
 
+        // GPU-1 備註：readback 包含完整 Body 結構（含 acc），多讀 5 floats/body。
+        // 對 N≤64 影響可忽略 (多 ~1.25KB)；分離 output buffer 需額外 shader pass，反而更慢。
         try {
             await this.readBuf.mapAsync(GPUMapMode.READ);
         } catch (e) {
