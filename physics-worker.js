@@ -212,12 +212,12 @@ self.onmessage = function(e) {
         self.postMessage({ type: 'ready' });
     } else if (data.type === 'update_settings') {
         enableGR = data.enableGR;
-        cValue = TRUE_C * data.cScale;
+        cValue = TRUE_C * (enableGR ? data.cScale : 1.0);
         C2 = cValue * cValue;
     } else if (data.type === 'add') {
         bodies.push(data.body);
         computeAccelerations();
-        self.postMessage({ type: 'added' });
+        self.postMessage({ type: 'added', ok: true });
     } else if (data.type === 'step') {
         for (let s = 0; s < data.steps; s++) verletStep();
         const positions = new Float32Array(bodies.length * 3);
@@ -241,6 +241,7 @@ function computeAccelerations() {
     for (let i = 0; i < N; i++) { bodies[i].ax = 0; bodies[i].ay = 0; bodies[i].az = 0; }
     let safeDt = BASE_DT;
     ksActivePairs = [];  // 重置 KS 對列表
+    const ksSet = new Set(); // 追蹤已經在 KS 對中的天體，防止重複加入
 
     // ── Phase 1: 計算所有力 + 偵測合併 (基於一致的狀態快照) ──
     const mergeTargets = new Int32Array(N);
@@ -257,7 +258,7 @@ function computeAccelerations() {
 
             // 合併偵測 — 標記但不立即執行，確保力計算一致性
             const Rs = 2.0 * G * (bi.m + bj.m) / C2;
-            const R_merge = Math.max(3.0 * Rs, Math.sqrt(EPSILON_SQ));
+            const R_merge = Math.max((bi.radius || 0) + (bj.radius || 0), Math.max(3.0 * Rs, Math.sqrt(EPSILON_SQ)));
             if (dist < R_merge) {
                 if (bi.m < bj.m) { if (mergeTargets[i] < 0) mergeTargets[i] = j; }
                 else             { if (mergeTargets[j] < 0) mergeTargets[j] = i; }
@@ -268,8 +269,13 @@ function computeAccelerations() {
             // 跳過直接力計算，改由 verletStep 中的 ksSubIntegrate 處理
             const R_ks = KS_FACTOR * R_merge;
             if (dist < R_ks) {
-                ksActivePairs.push({ ia: i, ib: j });
-                continue; // KS 對跳過直接力計算，由子步積分處理
+                if (!ksSet.has(i) && !ksSet.has(j)) {
+                    ksActivePairs.push({ ia: i, ib: j });
+                    ksSet.add(i);
+                    ksSet.add(j);
+                    continue; // KS 對跳過直接力計算，由子步積分處理
+                }
+                // 若已有天體在其他 KS 對中，則降級為直接力計算，仰賴自適應步長
             }
 
             // 雙準則自適應步長

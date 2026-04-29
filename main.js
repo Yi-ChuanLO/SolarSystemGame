@@ -47,46 +47,46 @@ function moonState(parent, a_moon, i_deg, Omega_deg, nu_deg, M_parent) {
 // ── 行星資料 (含真實軌道傾角) ──
 const M_SUN = 1.0;
 const planetDefs = [
-    // name, mass, a, i(°), Ω(°), ν(°), color, radius
+    // name, mass, a, i(°), Ω(°), ν(°), color, radius, physicalRadius(AU)
     // 視覺半徑刻意縮小，確保衛星軌道在母體球體之外；遠距可見性由 updateVisuals 的動態縮放保障
-    ['太陽', 1.0, 0, 0, 0, 0, 0xffdd00, 0.015],
-    ['水星', 1.65e-7, 0.387, 7.005, 48.33, 0, 0xaaaaaa, 0.001],
-    ['金星', 2.45e-6, 0.723, 3.395, 76.68, 60, 0xffcc88, 0.0015],
-    ['地球', 3.00e-6, 1.000, 0.000, 0.00, 0, 0x4488ff, 0.0015],
-    ['火星', 3.20e-7, 1.524, 1.850, 49.56, 120, 0xff5533, 0.001],
-    ['木星', 9.50e-4, 5.200, 1.303, 100.46, 80, 0xddaa77, 0.003],
-    ['土星', 2.80e-4, 9.580, 2.485, 113.67, 200, 0xeecc99, 0.0025],
-    ['天王星', 4.37e-5, 19.200, 0.773, 74.01, 280, 0x66ccff, 0.002],
-    ['海王星', 5.00e-5, 30.050, 1.770, 131.78, 330, 0x3366ff, 0.002],
+    ['太陽', 1.0, 0, 0, 0, 0, 0xffdd00, 0.015, 0.00465],
+    ['水星', 1.65e-7, 0.387, 7.005, 48.33, 0, 0xaaaaaa, 0.001, 1.63e-5],
+    ['金星', 2.45e-6, 0.723, 3.395, 76.68, 60, 0xffcc88, 0.0015, 4.05e-5],
+    ['地球', 3.00e-6, 1.000, 0.000, 0.00, 0, 0x4488ff, 0.0015, 4.26e-5],
+    ['火星', 3.20e-7, 1.524, 1.850, 49.56, 120, 0xff5533, 0.001, 2.27e-5],
+    ['木星', 9.50e-4, 5.200, 1.303, 100.46, 80, 0xddaa77, 0.003, 4.78e-4],
+    ['土星', 2.80e-4, 9.580, 2.485, 113.67, 200, 0xeecc99, 0.0025, 4.03e-4],
+    ['天王星', 4.37e-5, 19.200, 0.773, 74.01, 280, 0x66ccff, 0.002, 1.70e-4],
+    ['海王星', 5.00e-5, 30.050, 1.770, 131.78, 330, 0x3366ff, 0.002, 1.65e-4],
 ];
 
 // ── 衛星資料 ──
-// [name, parentIdx, a(AU), mass(M☉), i(°), Ω(°), ν(°), color, radius]
+// [name, parentIdx, a(AU), mass(M☉), i(°), Ω(°), ν(°), color, radius, physicalRadius]
 const moonDefs = [
     // 地球系
-    ['月球', 3, 2.570e-3, 3.69e-8, 5.145, 125.0, 0, 0xcccccc, 0.0008],
+    ['月球', 3, 2.570e-3, 3.69e-8, 5.145, 125.0, 0, 0xcccccc, 0.0008, 1.16e-5],
     // 木星系 (排除 Io 以維持效能)
-    ['Europa', 5, 4.485e-3, 2.41e-8, 1.79, 0, 0, 0xccddff, 0.0008],
-    ['Ganymede', 5, 7.155e-3, 7.45e-8, 2.21, 0, 120, 0xbbaa88, 0.001],
-    ['Callisto', 5, 1.259e-2, 5.41e-8, 2.02, 0, 240, 0x887766, 0.0008],
+    ['Europa', 5, 4.485e-3, 2.41e-8, 1.79, 0, 0, 0xccddff, 0.0008, 1.05e-5],
+    ['Ganymede', 5, 7.155e-3, 7.45e-8, 2.21, 0, 120, 0xbbaa88, 0.001, 1.76e-5],
+    ['Callisto', 5, 1.259e-2, 5.41e-8, 2.02, 0, 240, 0x887766, 0.0008, 1.61e-5],
     // 土星系
-    ['Titan', 6, 8.168e-3, 6.76e-8, 27.0, 0, 0, 0xff8833, 0.001],
-    ['Rhea', 6, 3.522e-3, 1.16e-9, 27.0, 0, 180, 0xddddcc, 0.0006],
+    ['Titan', 6, 8.168e-3, 6.76e-8, 27.0, 0, 0, 0xff8833, 0.001, 1.72e-5],
+    ['Rhea', 6, 3.522e-3, 1.16e-9, 27.0, 0, 180, 0xddddcc, 0.0006, 5.10e-6],
     // 天王星系 (軌道近垂直黃道面, i≈97.8°)
-    ['Titania', 7, 2.917e-3, 1.76e-9, 97.8, 0, 0, 0xaabbcc, 0.0006],
-    ['Oberon', 7, 3.900e-3, 1.46e-9, 97.8, 0, 180, 0x998877, 0.0006],
+    ['Titania', 7, 2.917e-3, 1.76e-9, 97.8, 0, 0, 0xaabbcc, 0.0006, 5.27e-6],
+    ['Oberon', 7, 3.900e-3, 1.46e-9, 97.8, 0, 180, 0x998877, 0.0006, 5.09e-6],
     // 海王星系 (逆行軌道, i≈157°)
-    ['Triton', 8, 2.371e-3, 1.08e-8, 157.0, 0, 0, 0xaaddff, 0.0008],
+    ['Triton', 8, 2.371e-3, 1.08e-8, 157.0, 0, 0, 0xaaddff, 0.0008, 9.04e-6],
 ];
 
 // ── 矮行星資料 ──
-// [name, a(AU), e, mass(M☉), i(°), Ω(°), color, radius]
+// [name, a(AU), e, mass(M☉), i(°), Ω(°), color, radius, physicalRadius]
 const dwarfDefs = [
-    ['冥王星', 39.48, 0.250, 6.58e-9, 17.16, 110.30, 0xddbb88, 0.001],
-    ['Ceres', 2.77, 0.076, 4.72e-10, 10.59, 80.33, 0x999999, 0.0008],
-    ['Eris', 67.67, 0.440, 8.35e-9, 44.04, 35.87, 0xeeeeee, 0.001],
-    ['Haumea', 43.22, 0.195, 2.01e-9, 28.21, 121.90, 0xddccbb, 0.0008],
-    ['Makemake', 45.51, 0.161, 1.56e-9, 29.01, 79.42, 0xcc8866, 0.0008],
+    ['冥王星', 39.48, 0.250, 6.58e-9, 17.16, 110.30, 0xddbb88, 0.001, 7.94e-6],
+    ['Ceres', 2.77, 0.076, 4.72e-10, 10.59, 80.33, 0x999999, 0.0008, 3.14e-6],
+    ['Eris', 67.67, 0.440, 8.35e-9, 44.04, 35.87, 0xeeeeee, 0.001, 7.77e-6],
+    ['Haumea', 43.22, 0.195, 2.01e-9, 28.21, 121.90, 0xddccbb, 0.0008, 5.43e-6],
+    ['Makemake', 45.51, 0.161, 1.56e-9, 29.01, 79.42, 0xcc8866, 0.0008, 4.81e-6],
 ];
 
 // ── 組裝初始資料 ──
@@ -94,7 +94,7 @@ const initialBodiesData = [];
 
 // 1) 行星
 const planetStates = []; // 暫存行星狀態供衛星參考
-for (const [name, m, a, i, O, nu, color, radius] of planetDefs) {
+for (const [name, m, a, i, O, nu, color, radius, physicalRadius] of planetDefs) {
     let state;
     if (a === 0) { // 太陽
         state = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 };
@@ -102,21 +102,21 @@ for (const [name, m, a, i, O, nu, color, radius] of planetDefs) {
         state = circOrbit(a, i, O, nu, M_SUN);
     }
     planetStates.push({ ...state, m });
-    initialBodiesData.push({ name, m, ...state, color, radius });
+    initialBodiesData.push({ name, m, ...state, color, radius, physicalRadius });
 }
 
 // 2) 衛星
-for (const [name, pi, a, m, i, O, nu, color, radius] of moonDefs) {
+for (const [name, pi, a, m, i, O, nu, color, radius, physicalRadius] of moonDefs) {
     const parent = planetStates[pi];
     const state = moonState(parent, a, i, O, nu, parent.m);
-    initialBodiesData.push({ name, m, ...state, color, radius });
+    initialBodiesData.push({ name, m, ...state, color, radius, physicalRadius });
 }
 
 // 3) 矮行星
 const plutoIdx = initialBodiesData.length; // 記住冥王星索引供 Charon 使用
-for (const [name, a, e, m, i, O, color, radius] of dwarfDefs) {
+for (const [name, a, e, m, i, O, color, radius, physicalRadius] of dwarfDefs) {
     const state = periOrbit(a, e, i, O, M_SUN);
-    initialBodiesData.push({ name, m, ...state, color, radius });
+    initialBodiesData.push({ name, m, ...state, color, radius, physicalRadius });
 }
 
 // 4) Charon (繞冥王星的衛星, 傾角 ≈119.6°)
@@ -124,11 +124,11 @@ for (const [name, a, e, m, i, O, color, radius] of dwarfDefs) {
     const pluto = initialBodiesData[plutoIdx];
     const parentState = { x: pluto.x, y: pluto.y, z: pluto.z, vx: pluto.vx, vy: pluto.vy, vz: pluto.vz };
     const charonState = moonState(parentState, 1.313e-4, 119.6, 0, 0, pluto.m);
-    initialBodiesData.push({ name: 'Charon', m: 8.04e-10, ...charonState, color: 0xaaaaaa, radius: 0.0006 });
+    initialBodiesData.push({ name: 'Charon', m: 8.04e-10, ...charonState, color: 0xaaaaaa, radius: 0.0006, physicalRadius: 4.05e-6 });
 }
 
 // 準備物理狀態 + 歸零質心速度
-const physicsState = initialBodiesData.map(b => ({ m: b.m, x: b.x, y: b.y, z: b.z, vx: b.vx, vy: b.vy, vz: b.vz, ax: 0, ay: 0, az: 0 }));
+const physicsState = initialBodiesData.map(b => ({ m: b.m, x: b.x, y: b.y, z: b.z, vx: b.vx, vy: b.vy, vz: b.vz, ax: 0, ay: 0, az: 0, radius: b.physicalRadius }));
 {
     let tM = 0, px = 0, py = 0, pz = 0;
     physicsState.forEach(b => { tM += b.m; px += b.m * b.vx; py += b.m * b.vy; pz += b.m * b.vz; });
@@ -214,7 +214,7 @@ class WorkerPhysics {
                 });
                 this._resolve = null;
             } else if (e.data.type === 'added' && this._addResolve) {
-                this._addResolve();
+                this._addResolve(e.data); // e.data.ok 會傳遞
                 this._addResolve = null;
             }
         };
@@ -285,9 +285,9 @@ setMode('view');
 
 let selectedExtremeType = 'wd';
 const EXTREME = {
-    'wd': { name: '白矮星', m: 1.2, color: 0xffffff, radius: 0.05 },
-    'ns': { name: '中子星', m: 2.0, color: 0x00ffff, radius: 0.03 },
-    'bh': { name: '黑洞', m: 50.0, color: 0xaa00ff, radius: 0.2 },
+    'wd': { name: '白矮星', m: 1.2, color: 0xffffff, radius: 0.05, physicalRadius: 4.26e-5 },
+    'ns': { name: '中子星', m: 2.0, color: 0x00ffff, radius: 0.03, physicalRadius: 6.68e-8 },
+    'bh': { name: '黑洞', m: 50.0, color: 0xaa00ff, radius: 0.2, physicalRadius: 0.0 }, // 黑洞半徑主要由捕獲半徑決定
 };
 document.querySelectorAll('.celestial-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -462,9 +462,10 @@ window.addEventListener('click', e => {
         mainThreadBodies.forEach(b => { if (b.m > 0) { tM += b.m; cx += b.m * b.x; cz += b.m * b.z; } });
         if (tM > 0) { cx /= tM; cz /= tM; }
         const rdx = hp.x - cx, rdz = hp.z - cz, r = Math.sqrt(rdx * rdx + rdz * rdz);
+        const invR = r > 1e-12 ? 1.0 / r : 0.0;
         const vc = r > 0.05 ? Math.sqrt(G_MAIN * tM / r) : 0;
-        const vx = -vc * (rdz / r), vz = vc * (rdx / r);
-        const body = { m: tmpl.m, x: hp.x, y: 0, z: hp.z, vx, vy: 0, vz, ax: 0, ay: 0, az: 0 };
+        const vx = -vc * (rdz * invR), vz = vc * (rdx * invR);
+        const body = { m: tmpl.m, x: hp.x, y: 0, z: hp.z, vx, vy: 0, vz, ax: 0, ay: 0, az: 0, radius: tmpl.physicalRadius };
         const visual = { name: tmpl.name, m: tmpl.m, x: hp.x, y: 0, z: hp.z, color: tmpl.color, radius: tmpl.radius };
         const isBH = selectedExtremeType === 'bh';
         pendingAdds.push({ body, visual, isBH });
@@ -475,7 +476,17 @@ window.addEventListener('click', e => {
 async function processPendingAdds() {
     while (pendingAdds.length > 0) {
         const { body, visual, isBH } = pendingAdds.shift();
-        await physics.addBody(body);
+        const res = await physics.addBody(body);
+        if (res && res.ok === false) {
+            console.warn("無法新增天體:", res.reason);
+            const desc = document.querySelector('#ui-content p');
+            if (desc) {
+                const oldHTML = desc.innerHTML;
+                desc.innerHTML = `<span class="text-red-400">無法新增天體：${res.reason}</span>`;
+                setTimeout(() => { if (desc.innerHTML.includes('無法新增天體')) desc.innerHTML = oldHTML; }, 2000);
+            }
+            continue;
+        }
         mainThreadBodies.push({ name: visual.name, m: body.m, x: body.x, y: body.y || 0, z: body.z });
         createBodyVisual(visual);
         updateCameraOptions();
@@ -615,7 +626,7 @@ function animate() {
 // ────────────────── 啟動 ──────────────────
 initPhysics().then(() => {
     const desc = document.querySelector('#ui-content p');
-    if (desc) desc.innerHTML = `物理後端：<b class="text-green-400">${backendName}</b>｜Velocity Verlet 積分器<br>單位：AU / M☉ / 年`;
+    if (desc) desc.innerHTML = `物理後端：<b class="text-green-400">${backendName}</b>｜${backendName === 'WebGPU' ? '高效能自適應步長' : '高精度 KS 正則化'}<br>單位：AU / M☉ / 年｜近似軌道模型`;
     animate();
 }).catch(() => {
     // 初始化失敗已在上方函數中顯示錯誤訊息

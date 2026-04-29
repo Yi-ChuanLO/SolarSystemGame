@@ -91,7 +91,7 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
                     let d = sqrt(d2);
 
                     let Rs = 2.0 * P.G * (mi + mj) / P.C2;
-                    let R_merge = max(3.0 * Rs, sqrt(P.EPS2));
+                    let R_merge = max(vi.w + vj.w, max(3.0 * Rs, sqrt(P.EPS2)));
                     if (d < R_merge) {
                         if (mi < mj || (mi == mj && i > j)) {
                             swallowedBy[i] = i32(j);
@@ -270,14 +270,15 @@ fn initAccel(@builtin(local_invocation_id) lid: vec3u) {
 
     for (var j = 0u; j < N; j++) {
         if (j == i) { continue; }
-        let pj = B[j].pos; let mj = pj.w;
+        let pj = B[j].pos; let vj = B[j].vel; let mj = pj.w;
         if (mj == 0.0) { continue; }
         let r = pj.xyz - pi.xyz;
         let d2 = dot(r,r) + P.EPS2;
         let d = sqrt(d2);
 
+        let vi = B[i].vel;
         let Rs = 2.0 * P.G * (mi + mj) / P.C2;
-        let R_merge = max(3.0 * Rs, sqrt(P.EPS2));
+        let R_merge = max(vi.w + vj.w, max(3.0 * Rs, sqrt(P.EPS2)));
         if (d < R_merge) { continue; }
 
         let id3 = 1.0 / (d2 * d);
@@ -331,12 +332,12 @@ export class WebGPUPhysics {
         this.dtBuf = this.device.createBuffer({ size: 8, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
         this.readBuf = this.device.createBuffer({ size: bSize, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
 
-        // 上傳天體資料 (pos.w = mass)
+        // 上傳天體資料 (pos.w = mass, vel.w = radius)
         const bd = new Float32Array(MAX_BODIES * 12);
         for (let i = 0; i < this.N; i++) {
             const b = bodies[i], o = i * 12;
             bd[o]=b.x; bd[o+1]=b.y; bd[o+2]=b.z; bd[o+3]=b.m;
-            bd[o+4]=b.vx; bd[o+5]=b.vy; bd[o+6]=b.vz;
+            bd[o+4]=b.vx; bd[o+5]=b.vy; bd[o+6]=b.vz; bd[o+7]=b.radius || 0.0;
         }
         this.device.queue.writeBuffer(this.bodyBuf, 0, bd);
 
@@ -409,9 +410,8 @@ export class WebGPUPhysics {
             console.error('GPU readback failed:', e);
             return { positions: this._posOut.subarray(0, this.N * 3), velocities: this._velOut.subarray(0, this.N * 3), masses: this._massOut.subarray(0, this.N) };
         }
-        const raw = new Float32Array(this.readBuf.getMappedRange().slice(0));
-        this.readBuf.unmap();
-
+        const raw = new Float32Array(this.readBuf.getMappedRange());
+        
         for (let i = 0; i < this.N; i++) {
             this._posOut[i*3]   = raw[i*12];
             this._posOut[i*3+1] = raw[i*12+1];
@@ -421,15 +421,16 @@ export class WebGPUPhysics {
             this._velOut[i*3+1] = raw[i*12+5];
             this._velOut[i*3+2] = raw[i*12+6];
         }
+        this.readBuf.unmap();
         return { positions: this._posOut.subarray(0, this.N * 3), velocities: this._velOut.subarray(0, this.N * 3), masses: this._massOut.subarray(0, this.N) };
     }
 
     async addBody(body) {
-        if (this.N >= MAX_BODIES) return;
+        if (this.N >= MAX_BODIES) return { ok: false, reason: `WebGPU 後端最多支援 ${MAX_BODIES} 個天體` };
         const o = this.N * 12;
         const d = new Float32Array(12);
         d[0]=body.x; d[1]=body.y; d[2]=body.z; d[3]=body.m;
-        d[4]=body.vx; d[5]=body.vy; d[6]=body.vz;
+        d[4]=body.vx; d[5]=body.vy; d[6]=body.vz; d[7]=body.radius || 0.0;
         this.device.queue.writeBuffer(this.bodyBuf, this.N * BODY_STRIDE, d);
         this.N++;
         
@@ -444,11 +445,12 @@ export class WebGPUPhysics {
         p.end();
         this.device.queue.submit([enc.finish()]);
         await this.device.queue.onSubmittedWorkDone();
+        return { ok: true };
     }
 
     updateSettings({ enableGR, cScale }) {
         this._enableGR = enableGR;
-        const c = 63239.7263 * cScale;
+        const c = 63239.7263 * (enableGR ? cScale : 1.0);
         this._C2 = c * c;
         // 我們不用在這裡傳 subSteps，因為 step() 呼叫時會更新
         this._writeParams(1); 
