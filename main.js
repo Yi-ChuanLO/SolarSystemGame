@@ -7,18 +7,125 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 // ────────────────── 1. 太陽系初始資料 ──────────────────
 const TWO_PI = 2 * Math.PI;
 const G_MAIN = 4 * Math.PI * Math.PI;
+const DEG = Math.PI / 180;
 
-const initialBodiesData = [
-    { id:'sun',     name:'太陽',   m:1.0,      x:0,     y:0, z:0, vx:0, vy:0, vz:0,                             color:0xffdd00, radius:0.1  },
-    { id:'mercury', name:'水星',   m:1.65e-7,  x:0.387, y:0, z:0, vx:0, vy:0, vz:TWO_PI/Math.sqrt(0.387),       color:0xaaaaaa, radius:0.02 },
-    { id:'venus',   name:'金星',   m:2.45e-6,  x:0.723, y:0, z:0, vx:0, vy:0, vz:TWO_PI/Math.sqrt(0.723),       color:0xffcc88, radius:0.04 },
-    { id:'earth',   name:'地球',   m:3.0e-6,   x:1.0,   y:0, z:0, vx:0, vy:0, vz:TWO_PI,                        color:0x4488ff, radius:0.045},
-    { id:'mars',    name:'火星',   m:3.2e-7,   x:1.524, y:0, z:0, vx:0, vy:0, vz:TWO_PI/Math.sqrt(1.524),       color:0xff5533, radius:0.03 },
-    { id:'jupiter', name:'木星',   m:0.00095,  x:5.20,  y:0, z:0, vx:0, vy:0, vz:TWO_PI/Math.sqrt(5.20),        color:0xddaa77, radius:0.08 },
-    { id:'saturn',  name:'土星',   m:0.00028,  x:9.58,  y:0, z:0, vx:0, vy:0, vz:TWO_PI/Math.sqrt(9.58),        color:0xeecc99, radius:0.07 },
-    { id:'uranus',  name:'天王星', m:4.37e-5,  x:19.20, y:0, z:0, vx:0, vy:0, vz:TWO_PI/Math.sqrt(19.20),       color:0x66ccff, radius:0.06 },
-    { id:'neptune', name:'海王星', m:0.00005,  x:30.05, y:0, z:0, vx:0, vy:0, vz:TWO_PI/Math.sqrt(30.05),       color:0x3366ff, radius:0.06 },
+// ── 軌道力學工具函式 ──
+// 圓軌道 → 直角座標 (x-z = 黃道面, y = 北黃極)
+function circOrbit(a, i_deg, Omega_deg, nu_deg, M_central) {
+    const i = i_deg * DEG, O = Omega_deg * DEG, nu = nu_deg * DEG;
+    const v = TWO_PI * Math.sqrt(M_central / a);
+    const cO = Math.cos(O), sO = Math.sin(O);
+    const ci = Math.cos(i), si = Math.sin(i);
+    const cn = Math.cos(nu), sn = Math.sin(nu);
+    return {
+        x:  (cO*cn - sO*ci*sn) * a,
+        y:  (si*sn) * a,
+        z:  (sO*cn + cO*ci*sn) * a,
+        vx: (-cO*sn - sO*ci*cn) * v,
+        vy: (si*cn) * v,
+        vz: (-sO*sn + cO*ci*cn) * v,
+    };
+}
+// 偏心軌道近日點 → 直角座標
+function periOrbit(a, e, i_deg, Omega_deg, M_central) {
+    const rp = a * (1 - e);
+    const vp = TWO_PI * Math.sqrt(M_central * (1 + e) / (a * (1 - e)));
+    const i = i_deg * DEG, O = Omega_deg * DEG;
+    const cO = Math.cos(O), sO = Math.sin(O);
+    const ci = Math.cos(i), si = Math.sin(i);
+    return { x: cO*rp, y: 0, z: sO*rp, vx: -sO*ci*vp, vy: si*vp, vz: cO*ci*vp };
+}
+// 衛星座標 = 母體座標 + 相對軌道座標
+function moonState(parent, a_moon, i_deg, Omega_deg, nu_deg, M_parent) {
+    const rel = circOrbit(a_moon, i_deg, Omega_deg, nu_deg, M_parent);
+    return {
+        x: parent.x+rel.x, y: parent.y+rel.y, z: parent.z+rel.z,
+        vx: parent.vx+rel.vx, vy: parent.vy+rel.vy, vz: parent.vz+rel.vz,
+    };
+}
+
+// ── 行星資料 (含真實軌道傾角) ──
+const M_SUN = 1.0;
+const planetDefs = [
+    // name, mass, a, i(°), Ω(°), ν(°), color, radius
+    // 視覺半徑刻意縮小，確保衛星軌道在母體球體之外；遠距可見性由 updateVisuals 的動態縮放保障
+    ['太陽',   1.0,      0,     0,      0,    0,   0xffdd00, 0.015],
+    ['水星',   1.65e-7,  0.387, 7.005,  48.33,  0, 0xaaaaaa, 0.001],
+    ['金星',   2.45e-6,  0.723, 3.395,  76.68, 60, 0xffcc88, 0.0015],
+    ['地球',   3.00e-6,  1.000, 0.000,   0.00,  0, 0x4488ff, 0.0015],
+    ['火星',   3.20e-7,  1.524, 1.850,  49.56,120, 0xff5533, 0.001],
+    ['木星',   9.50e-4,  5.200, 1.303, 100.46, 80, 0xddaa77, 0.003],
+    ['土星',   2.80e-4,  9.580, 2.485, 113.67,200, 0xeecc99, 0.0025],
+    ['天王星', 4.37e-5, 19.200, 0.773,  74.01,280, 0x66ccff, 0.002],
+    ['海王星', 5.00e-5, 30.050, 1.770, 131.78,330, 0x3366ff, 0.002],
 ];
+
+// ── 衛星資料 ──
+// [name, parentIdx, a(AU), mass(M☉), i(°), Ω(°), ν(°), color, radius]
+const moonDefs = [
+    // 地球系
+    ['月球',     3, 2.570e-3, 3.69e-8,   5.145, 125.0,   0, 0xcccccc, 0.0008],
+    // 木星系 (排除 Io 以維持效能)
+    ['Europa',   5, 4.485e-3, 2.41e-8,   1.79,    0,    0, 0xccddff, 0.0008],
+    ['Ganymede', 5, 7.155e-3, 7.45e-8,   2.21,    0,  120, 0xbbaa88, 0.001],
+    ['Callisto', 5, 1.259e-2, 5.41e-8,   2.02,    0,  240, 0x887766, 0.0008],
+    // 土星系
+    ['Titan',    6, 8.168e-3, 6.76e-8,  27.0,     0,    0, 0xff8833, 0.001],
+    ['Rhea',     6, 3.522e-3, 1.16e-9,  27.0,     0,  180, 0xddddcc, 0.0006],
+    // 天王星系 (軌道近垂直黃道面, i≈97.8°)
+    ['Titania',  7, 2.917e-3, 1.76e-9,  97.8,     0,    0, 0xaabbcc, 0.0006],
+    ['Oberon',   7, 3.900e-3, 1.46e-9,  97.8,     0,  180, 0x998877, 0.0006],
+    // 海王星系 (逆行軌道, i≈157°)
+    ['Triton',   8, 2.371e-3, 1.08e-8, 157.0,     0,    0, 0xaaddff, 0.0008],
+];
+
+// ── 矮行星資料 ──
+// [name, a(AU), e, mass(M☉), i(°), Ω(°), color, radius]
+const dwarfDefs = [
+    ['冥王星',   39.48, 0.250, 6.58e-9, 17.16, 110.30, 0xddbb88, 0.001],
+    ['Ceres',     2.77, 0.076, 4.72e-10,10.59,  80.33, 0x999999, 0.0008],
+    ['Eris',     67.67, 0.440, 8.35e-9, 44.04,  35.87, 0xeeeeee, 0.001],
+    ['Haumea',   43.22, 0.195, 2.01e-9, 28.21, 121.90, 0xddccbb, 0.0008],
+    ['Makemake', 45.51, 0.161, 1.56e-9, 29.01,  79.42, 0xcc8866, 0.0008],
+];
+
+// ── 組裝初始資料 ──
+const initialBodiesData = [];
+
+// 1) 行星
+const planetStates = []; // 暫存行星狀態供衛星參考
+for (const [name, m, a, i, O, nu, color, radius] of planetDefs) {
+    let state;
+    if (a === 0) { // 太陽
+        state = { x:0, y:0, z:0, vx:0, vy:0, vz:0 };
+    } else {
+        state = circOrbit(a, i, O, nu, M_SUN);
+    }
+    planetStates.push({ ...state, m });
+    initialBodiesData.push({ name, m, ...state, color, radius });
+}
+
+// 2) 衛星
+for (const [name, pi, a, m, i, O, nu, color, radius] of moonDefs) {
+    const parent = planetStates[pi];
+    const state = moonState(parent, a, i, O, nu, parent.m);
+    initialBodiesData.push({ name, m, ...state, color, radius });
+}
+
+// 3) 矮行星
+const plutoIdx = initialBodiesData.length; // 記住冥王星索引供 Charon 使用
+for (const [name, a, e, m, i, O, color, radius] of dwarfDefs) {
+    const state = periOrbit(a, e, i, O, M_SUN);
+    initialBodiesData.push({ name, m, ...state, color, radius });
+}
+
+// 4) Charon (繞冥王星的衛星, 傾角 ≈119.6°)
+{
+    const pluto = initialBodiesData[plutoIdx];
+    const parentState = { x:pluto.x, y:pluto.y, z:pluto.z, vx:pluto.vx, vy:pluto.vy, vz:pluto.vz };
+    const charonState = moonState(parentState, 1.313e-4, 119.6, 0, 0, pluto.m);
+    initialBodiesData.push({ name:'Charon', m:8.04e-10, ...charonState, color:0xaaaaaa, radius:0.0006 });
+}
 
 // 準備物理狀態 + 歸零質心速度
 const physicsState = initialBodiesData.map(b => ({ m:b.m, x:b.x, y:b.y, z:b.z, vx:b.vx, vy:b.vy, vz:b.vz, ax:0, ay:0, az:0 }));
@@ -34,7 +141,7 @@ let mainThreadBodies = initialBodiesData.map(b => ({ name:b.name, m:b.m, x:b.x, 
 // ────────────────── 2. Three.js 場景 ──────────────────
 const container = document.getElementById('canvas-container');
 const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x000000, 0.015);
+scene.fog = new THREE.FogExp2(0x000000, 0.008);
 const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.01, 1000);
 camera.position.set(0, 15, 20);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -42,8 +149,8 @@ renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 container.appendChild(renderer.domElement);
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true; controls.dampingFactor = 0.05; controls.maxDistance = 200;
-scene.add(new THREE.GridHelper(100, 100, 0x333333, 0x111111));
+controls.enableDamping = true; controls.dampingFactor = 0.05; controls.maxDistance = 400;
+scene.add(new THREE.GridHelper(200, 200, 0x333333, 0x111111));
 const planeGeo = new THREE.PlaneGeometry(500, 500); planeGeo.rotateX(-Math.PI/2);
 const hitPlane = new THREE.Mesh(planeGeo, new THREE.MeshBasicMaterial({ visible: false }));
 scene.add(hitPlane);
@@ -64,10 +171,13 @@ function createTextSprite(msg, col) {
 }
 
 function createBodyVisual(d) {
-    const mesh = new THREE.Mesh(new THREE.SphereGeometry(d.radius,32,32), new THREE.MeshBasicMaterial({color:d.color}));
+    const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 32), new THREE.MeshBasicMaterial({color:d.color}));
     mesh.position.set(d.x, d.y||0, d.z);
+    mesh.scale.setScalar(d.radius); // 使用 scale 控制大小，便於動態縮放
+    mesh.userData.baseRadius = d.radius;
     const sp = createTextSprite(d.name, '#'+d.color.toString(16).padStart(6,'0'));
-    sp.position.y = d.radius + 0.2;
+    sp.position.y = 1.15; // 在單位球上方，隨 mesh.scale 自動縮放
+    sp.userData.baseLabelScale = [2, 1, 1];
     mesh.add(sp);
     const tGeo = new THREE.BufferGeometry();
     const tPos = new Float32Array(MAX_TRAIL*3);
@@ -199,14 +309,44 @@ function updateCameraOptions() {
     if (!cameraTargetSelect) return;
     const currentVal = cameraTargetSelect.value;
     cameraTargetSelect.innerHTML = '<option value="none" class="bg-gray-800">自由視角 (Free)</option>';
-    for (let i = 0; i < mainThreadBodies.length; i++) {
-        if (mainThreadBodies[i].m > 0) {
-            const opt = document.createElement('option');
-            opt.value = i;
-            opt.className = 'bg-gray-800';
-            opt.innerText = mainThreadBodies[i].name || `Body ${i}`;
-            cameraTargetSelect.appendChild(opt);
+    // 定義分組：[groupLabel, startIdx, endIdx]（依據 initialBodiesData 的順序）
+    const nPlanets = planetDefs.length;
+    const nMoons = moonDefs.length;
+    const nDwarfs = dwarfDefs.length;
+    const groups = [
+        ['☀ 恆星與行星', 0, nPlanets],
+        ['🌙 衛星', nPlanets, nPlanets + nMoons],
+        ['🪨 矮行星', nPlanets + nMoons, nPlanets + nMoons + nDwarfs + 1], // +1 for Charon
+    ];
+    for (const [label, start, end] of groups) {
+        const grp = document.createElement('optgroup');
+        grp.label = label;
+        grp.className = 'bg-gray-800';
+        let hasItems = false;
+        for (let i = start; i < Math.min(end, mainThreadBodies.length); i++) {
+            if (mainThreadBodies[i].m > 0) {
+                const opt = document.createElement('option');
+                opt.value = i;
+                opt.className = 'bg-gray-800';
+                opt.innerText = mainThreadBodies[i].name || `Body ${i}`;
+                grp.appendChild(opt);
+                hasItems = true;
+            }
         }
+        // 動態新增的天體（超出預定義範圍）
+        if (label === '🪨 矮行星') {
+            for (let i = end; i < mainThreadBodies.length; i++) {
+                if (mainThreadBodies[i].m > 0) {
+                    const opt = document.createElement('option');
+                    opt.value = i;
+                    opt.className = 'bg-gray-800';
+                    opt.innerText = mainThreadBodies[i].name || `Body ${i}`;
+                    grp.appendChild(opt);
+                    hasItems = true;
+                }
+            }
+        }
+        if (hasItems) cameraTargetSelect.appendChild(grp);
     }
     if (cameraTargetSelect.querySelector(`option[value="${currentVal}"]`)) {
         cameraTargetSelect.value = currentVal;
@@ -404,6 +544,20 @@ function updateVisuals(positions, masses) {
             if (masses) mainThreadBodies[i].m = masses[i];
         }
         meshes[i].position.set(px, py, pz);
+        // 距離自適應縮放：保證天體在遠距時仍可見，近距時顯示真實比例
+        const baseR = meshes[i].userData.baseRadius || 0.01;
+        const camDist = camera.position.distanceTo(meshes[i].position);
+        const minVisualR = camDist * 0.0025; // 保證最小螢幕尺寸
+        const dynScale = Math.max(baseR, minVisualR);
+        meshes[i].scale.setScalar(dynScale);
+        // 標籤：維持恆定角大小 (constant angular size)，不受球體縮放影響
+        const labelSp = meshes[i].children[0];
+        if (labelSp) {
+            const desiredSize = camDist * 0.02; // 螢幕上約 2% 寬度
+            const s = desiredSize / dynScale;    // 抵消父層 scale
+            labelSp.scale.set(2 * s, s, 1);
+            labelSp.position.y = 1.0 + desiredSize * 0.3 / dynScale;
+        }
         const t = trails[i]; t.skip++;
         if (t.skip > 2) {
             t.skip = 0;
