@@ -597,12 +597,14 @@ function animate() {
             pending = true;
             const steps = parseInt(speedSlider.value);
             physics.step(steps).then(result => {
-                updateVisuals(result.positions, result.masses);
-                if (mergerHappened) {
-                    initialEnergy = null; // 合併屬非彈性碰撞，總能量會折損，必須重設基準點
-                    mergerHappened = false;
+                if (!result.pended) {
+                    updateVisuals(result.positions, result.masses);
+                    if (mergerHappened) {
+                        initialEnergy = null; // 合併屬非彈性碰撞，總能量會折損，必須重設基準點
+                        mergerHappened = false;
+                    }
+                    if (result.velocities) calcSystemEnergy(result.positions, result.velocities, result.masses);
                 }
-                if (result.velocities) calcSystemEnergy(result.positions, result.velocities, result.masses);
                 pending = false;
             });
         }

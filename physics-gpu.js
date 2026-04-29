@@ -306,17 +306,19 @@ export class WebGPUPhysics {
         this.bodyBuf = null;
         this.paramsBuf = null;
         this.dtBuf = null;
-        this.readBuf = null;
+        this.NUM_BUFFERS = 3;
+        this.readBuffers = [];
+        this.readIndex = 0;
+        this.pendingReads = [];
+        this.outPool = [];
+        for (let i = 0; i < this.NUM_BUFFERS; i++) {
+            this.outPool.push({
+                positions: new Float32Array(MAX_BODIES * 3),
+                velocities: new Float32Array(MAX_BODIES * 3),
+                masses: new Float32Array(MAX_BODIES)
+            });
+        }
         this.pipelines = {};
-        this.bindGroup = null;
-        this.N = 0;
-        this._enableGR = false;
-        this._C2 = 63239.7263 * 63239.7263;
-        // 預分配輸出緩衝區，避免每幀 GC 壓力
-        this._posOut = new Float32Array(MAX_BODIES * 3);
-        this._velOut = new Float32Array(MAX_BODIES * 3);
-        this._massOut = new Float32Array(MAX_BODIES);
-    }
 
     async init(bodies) {
         const adapter = await navigator.gpu.requestAdapter();
@@ -330,7 +332,9 @@ export class WebGPUPhysics {
         this.bodyBuf = this.device.createBuffer({ size: bSize, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
         this.paramsBuf = this.device.createBuffer({ size: PARAMS_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
         this.dtBuf = this.device.createBuffer({ size: 8, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
-        this.readBuf = this.device.createBuffer({ size: bSize, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+        for (let i = 0; i < this.NUM_BUFFERS; i++) {
+            this.readBuffers.push(this.device.createBuffer({ size: bSize, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ }));
+        }
 
         // 上傳天體資料 (pos.w = mass, vel.w = radius)
         const bd = new Float32Array(MAX_BODIES * 12);
@@ -399,30 +403,48 @@ export class WebGPUPhysics {
         p.end();
 
         const byteLen = this.N * BODY_STRIDE;
-        enc.copyBufferToBuffer(this.bodyBuf, 0, this.readBuf, 0, byteLen);
+        
+        const currentReadBuf = this.readBuffers[this.readIndex];
+        const out = this.outPool[this.readIndex];
+        this.readIndex = (this.readIndex + 1) % this.NUM_BUFFERS;
+
+        enc.copyBufferToBuffer(this.bodyBuf, 0, currentReadBuf, 0, byteLen);
         this.device.queue.submit([enc.finish()]);
 
-        // GPU-1 備註：readback 包含完整 Body 結構（含 acc），多讀 5 floats/body。
-        // 對 N≤64 影響可忽略 (多 ~1.25KB)；分離 output buffer 需額外 shader pass，反而更慢。
-        try {
-            await this.readBuf.mapAsync(GPUMapMode.READ);
-        } catch (e) {
+        const currentN = this.N; // capture for the closure
+        const readPromise = currentReadBuf.mapAsync(GPUMapMode.READ).then(() => {
+            const raw = new Float32Array(currentReadBuf.getMappedRange());
+            for (let i = 0; i < currentN; i++) {
+                out.positions[i*3]   = raw[i*12];
+                out.positions[i*3+1] = raw[i*12+1];
+                out.positions[i*3+2] = raw[i*12+2];
+                out.masses[i]    = raw[i*12+3];
+                out.velocities[i*3]   = raw[i*12+4];
+                out.velocities[i*3+1] = raw[i*12+5];
+                out.velocities[i*3+2] = raw[i*12+6];
+            }
+            currentReadBuf.unmap();
+            return { 
+                positions: out.positions.subarray(0, currentN * 3), 
+                velocities: out.velocities.subarray(0, currentN * 3), 
+                masses: out.masses.subarray(0, currentN) 
+            };
+        }).catch(e => {
             console.error('GPU readback failed:', e);
-            return { positions: this._posOut.subarray(0, this.N * 3), velocities: this._velOut.subarray(0, this.N * 3), masses: this._massOut.subarray(0, this.N) };
+            return { 
+                positions: out.positions.subarray(0, currentN * 3), 
+                velocities: out.velocities.subarray(0, currentN * 3), 
+                masses: out.masses.subarray(0, currentN) 
+            };
+        });
+
+        this.pendingReads.push(readPromise);
+
+        if (this.pendingReads.length >= this.NUM_BUFFERS) {
+            return await this.pendingReads.shift();
+        } else {
+            return { pended: true };
         }
-        const raw = new Float32Array(this.readBuf.getMappedRange());
-        
-        for (let i = 0; i < this.N; i++) {
-            this._posOut[i*3]   = raw[i*12];
-            this._posOut[i*3+1] = raw[i*12+1];
-            this._posOut[i*3+2] = raw[i*12+2];
-            this._massOut[i]    = raw[i*12+3];
-            this._velOut[i*3]   = raw[i*12+4];
-            this._velOut[i*3+1] = raw[i*12+5];
-            this._velOut[i*3+2] = raw[i*12+6];
-        }
-        this.readBuf.unmap();
-        return { positions: this._posOut.subarray(0, this.N * 3), velocities: this._velOut.subarray(0, this.N * 3), masses: this._massOut.subarray(0, this.N) };
     }
 
     async addBody(body) {
