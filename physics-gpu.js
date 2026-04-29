@@ -77,6 +77,7 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
         if (i < N) {
             let pi = sB[i].pos; let vi = sB[i].vel; let mi = pi.w;
             var acc = vec3f(0.0);
+            var acc_comp = vec3f(0.0); // Kahan 補償求和：消除 f32 力累加截斷誤差
             var mdt = P.BASE_DT;
 
             if (mi > 0.0) {
@@ -128,7 +129,11 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
                         let dr = max(d - rs, rs * 0.05 + 1e-10);
                         g = P.G * mj * r / (d * dr * dr);
                     }
-                    acc += g;
+                    // Kahan compensated summation: 精度從 O(N·ε) 提升至 O(ε²)
+                    let y_k = g - acc_comp;
+                    let t_k = acc + y_k;
+                    acc_comp = (t_k - acc) - y_k;
+                    acc = t_k;
                 }
             }
             
@@ -193,6 +198,7 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
             if (didMerge) {
                 let pi5 = sB[i].pos; let mi5 = pi5.w;
                 var acc5 = vec3f(0.0);
+                var acc5_comp = vec3f(0.0); // Kahan 補償
                 for (var j5 = 0u; j5 < N; j5++) {
                     if (j5 == i) { continue; }
                     let pj5 = sB[j5].pos; let mj5 = pj5.w;
@@ -206,17 +212,23 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
                         let dr5 = max(d_5 - rs5, rs5 * 0.05 + 1e-10);
                         g5 = P.G * mj5 * r5 / (d_5 * dr5 * dr5);
                     }
-                    acc5 += g5;
+                    let y5 = g5 - acc5_comp;
+                    let t5 = acc5 + y5;
+                    acc5_comp = (t5 - acc5) - y5;
+                    acc5 = t5;
                 }
                 sB[i].acc = vec4f(acc5, 0.0);
             }
         }
         workgroupBarrier();
 
-        // 步長平滑化 (Timestep Smoothing): 允許快速縮小(0.5x)，緩慢放大(1.1x)，以保護辛結構與能量守恆
+        // 步長指數衰減平滑：縮小快 (α=0.7)、放大慢 (α=0.3)，比 clamp 更平滑地保護辛結構
         if (i == 0) {
             let targetDt = bitcast<f32>(atomicLoad(&sDtNext));
-            let smoothedDt = clamp(targetDt, sDtCur * 0.5, sDtCur * 1.1);
+            let ratio = targetDt / max(sDtCur, 1e-20);
+            let alpha = select(0.3, 0.7, ratio < 1.0);
+            var smoothedDt = max(sDtCur * pow(ratio, alpha), P.MIN_DT);
+            smoothedDt = min(smoothedDt, sDtCur * 2.0); // 成長上限 2x，防止交會結束後步長暴漲破壞辛結構
             atomicStore(&sDtNext, bitcast<u32>(smoothedDt));
         }
         workgroupBarrier();
@@ -249,6 +261,7 @@ fn initAccel(@builtin(local_invocation_id) lid: vec3u) {
     
     let pi = B[i].pos; let mi = pi.w;
     var acc = vec3f(0.0);
+    var ia_comp = vec3f(0.0); // Kahan 補償
 
     if (mi == 0.0) {
         B[i].acc = vec4f(0.0);
@@ -276,7 +289,10 @@ fn initAccel(@builtin(local_invocation_id) lid: vec3u) {
             let dr = max(d - rs, rs * 0.05 + 1e-10);
             g = P.G * mj * r / (d * dr * dr);
         }
-        acc += g;
+        let ia_y = g - ia_comp;
+        let ia_t = acc + ia_y;
+        ia_comp = (ia_t - acc) - ia_y;
+        acc = ia_t;
     }
     B[i].acc = vec4f(acc, 0.0);
 }

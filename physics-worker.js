@@ -373,7 +373,12 @@ function computeAccelerations() {
     }
 
     let targetDt = Math.max(safeDt, MIN_DT);
-    nextSafeDt = Math.max(nextSafeDt * 0.5, Math.min(targetDt, nextSafeDt * 1.1));
+    // 指數衰減平滑：縮小快 (α=0.7)、放大慢 (α=0.3)
+    const prevDt = nextSafeDt;
+    const ratio = targetDt / Math.max(prevDt, 1e-20);
+    const alpha = ratio < 1.0 ? 0.7 : 0.3;
+    nextSafeDt = Math.max(prevDt * Math.pow(ratio, alpha), MIN_DT);
+    nextSafeDt = Math.min(nextSafeDt, prevDt * 2.0); // 成長上限 2x
 }
 
 function verletStep() {
