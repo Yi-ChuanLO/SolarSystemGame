@@ -69,28 +69,28 @@ const moonDefs = [
     // 地球系
     ['月球', 3, 2.570e-3, 3.69e-8, 5.145, 125.0, 0, 0xcccccc, 0.0008, 1.16e-5],
     // 木星系 (排除 Io 以維持效能)
-    ['Europa',   5, 4.485e-3, 2.41e-8, 1.79, 0,   0,   0xccddff, 0.0008, 1.05e-5],
-    ['Ganymede', 5, 7.155e-3, 7.45e-8, 2.21, 0,   120, 0xbbaa88, 0.001,  1.76e-5],
-    ['Callisto', 5, 1.259e-2, 5.41e-8, 2.02, 0,   240, 0x887766, 0.0008, 1.61e-5],
+    ['歐羅巴',   5, 4.485e-3, 2.41e-8, 1.79, 0,   0,   0xccddff, 0.0008, 1.05e-5],
+    ['蓋尼米德', 5, 7.155e-3, 7.45e-8, 2.21, 0,   120, 0xbbaa88, 0.001,  1.76e-5],
+    ['卡利斯托', 5, 1.259e-2, 5.41e-8, 2.02, 0,   240, 0x887766, 0.0008, 1.61e-5],
     // 土星系 (傾角相對黃道面：土星軸傾 26.73° + 衛星相對赤道傾角)
     // Titan 相對赤道傾角 0.33° → 相對黃道 ≈ 27.06°；Rhea ≈ 26.73°
-    ['Titan', 6, 8.168e-3, 6.76e-8, 27.1, 0,   0,   0xff8833, 0.001,  1.72e-5],
-    ['Rhea',  6, 3.522e-3, 1.16e-9, 26.7, 0,   180, 0xddddcc, 0.0006, 5.10e-6],
+    ['泰坦',   6, 8.168e-3, 6.76e-8, 27.1, 0,   0,   0xff8833, 0.001,  1.72e-5],
+    ['瑞亞',   6, 3.522e-3, 1.16e-9, 26.7, 0,   180, 0xddddcc, 0.0006, 5.10e-6],
     // 天王星系 (軌道近垂直黃道面, i≈97.77°；升交點錯開 90° 避免軌道面完全重疊)
-    ['Titania', 7, 2.917e-3, 1.76e-9, 97.8, 0,   0,   0xaabbcc, 0.0006, 5.27e-6],
-    ['Oberon',  7, 3.900e-3, 1.46e-9, 97.8, 90,  180, 0x998877, 0.0006, 5.09e-6],
+    ['提坦尼亞', 7, 2.917e-3, 1.76e-9, 97.8, 0,   0,   0xaabbcc, 0.0006, 5.27e-6],
+    ['奧伯龍',   7, 3.900e-3, 1.46e-9, 97.8, 90,  180, 0x998877, 0.0006, 5.09e-6],
     // 海王星系 (逆行軌道, i≈157°)
-    ['Triton', 8, 2.371e-3, 1.08e-8, 157.0, 0, 0, 0xaaddff, 0.0008, 9.04e-6],
+    ['崔頓', 8, 2.371e-3, 1.08e-8, 157.0, 0, 0, 0xaaddff, 0.0008, 9.04e-6],
 ];
 
 // ── 矮行星資料 ──
 // [name, a(AU), e, mass(M☉), i(°), Ω(°), color, radius, physicalRadius]
 const dwarfDefs = [
-    ['冥王星', 39.48, 0.250, 6.58e-9, 17.16, 110.30, 0xddbb88, 0.001, 7.94e-6],
-    ['Ceres', 2.77, 0.076, 4.72e-10, 10.59, 80.33, 0x999999, 0.0008, 3.14e-6],
-    ['Eris', 67.67, 0.440, 8.35e-9, 44.04, 35.87, 0xeeeeee, 0.001, 7.77e-6],
-    ['Haumea', 43.22, 0.195, 2.01e-9, 28.21, 121.90, 0xddccbb, 0.0008, 5.43e-6],
-    ['Makemake', 45.51, 0.161, 1.56e-9, 29.01, 79.42, 0xcc8866, 0.0008, 4.81e-6],
+    ['冥王星',   39.48, 0.250, 6.58e-9, 17.16, 110.30, 0xddbb88, 0.001,  7.94e-6],
+    ['穀神星',    2.77, 0.076, 4.72e-10, 10.59,  80.33, 0x999999, 0.0008, 3.14e-6],
+    ['鬩神星',   67.67, 0.440, 8.35e-9, 44.04,  35.87, 0xeeeeee, 0.001,  7.77e-6],
+    ['妊神星',   43.22, 0.195, 2.01e-9, 28.21, 121.90, 0xddccbb, 0.0008, 5.43e-6],
+    ['鳥神星',   45.51, 0.161, 1.56e-9, 29.01,  79.42, 0xcc8866, 0.0008, 4.81e-6],
 ];
 
 // ── 組裝初始資料 ──
@@ -128,7 +128,7 @@ for (const [name, a, e, m, i, O, color, radius, physicalRadius] of dwarfDefs) {
     const pluto = initialBodiesData[plutoIdx];
     const parentState = { x: pluto.x, y: pluto.y, z: pluto.z, vx: pluto.vx, vy: pluto.vy, vz: pluto.vz };
     const charonState = moonState(parentState, 1.313e-4, 119.6, 0, 0, pluto.m);
-    initialBodiesData.push({ name: 'Charon', m: 8.04e-10, ...charonState, color: 0xaaaaaa, radius: 0.0006, physicalRadius: 4.05e-6 });
+    initialBodiesData.push({ name: '凱倫', m: 8.04e-10, ...charonState, color: 0xaaaaaa, radius: 0.0006, physicalRadius: 4.05e-6 });
 }
 
 // 準備物理狀態 + 歸零質心速度
@@ -396,7 +396,96 @@ function showToast(html, durationMs = 3000) {
     }, durationMs);
 }
 
-// ── 放置準星 ──
+// ── 天體資訊卡 ──
+const bodyInfoCard = document.getElementById('body-info-card');
+const bodyInfoClose = document.getElementById('body-info-close');
+const cardName = document.getElementById('card-name');
+const cardColorDot = document.getElementById('card-color-dot');
+const cardRows = document.getElementById('card-rows');
+let inspectedMeshIdx = -1;
+
+function makeCardRow(label, value) {
+    return `<div style="display:flex;justify-content:space-between;gap:12px;">
+        <span style="font-size:11px;color:#6b7280;">${label}</span>
+        <span style="font-size:11px;font-family:monospace;color:#d1d5db;">${value}</span>
+    </div>`;
+}
+
+function showBodyInfo(meshIdx, screenX, screenY) {
+    const b = mainThreadBodies[meshIdx];
+    if (!b || b.m === 0) return;
+
+    inspectedMeshIdx = meshIdx;
+    const mesh = meshes[meshIdx];
+    const hexColor = '#' + (mesh?.material?.color?.getHexString?.() || 'ffffff');
+
+    cardColorDot.style.background = hexColor;
+    cardColorDot.style.boxShadow = `0 0 6px ${hexColor}`;
+    cardName.innerText = b.name || `天體 ${meshIdx}`;
+
+    const speed = Math.sqrt((b.vx||0)**2 + (b.vy||0)**2 + (b.vz||0)**2);
+    const distSun = Math.sqrt(b.x**2 + b.y**2 + b.z**2);
+
+    cardRows.innerHTML =
+        makeCardRow('質量', `${b.m.toExponential(3)} M☉`) +
+        makeCardRow('速度', `${speed.toFixed(4)} AU/yr`) +
+        makeCardRow('距原點', `${distSun.toFixed(4)} AU`) +
+        makeCardRow('位置 X', `${b.x.toFixed(4)} AU`) +
+        makeCardRow('位置 Z', `${b.z.toFixed(4)} AU`);
+
+    // 定位：避免超出螢幕右側和底部
+    const cardW = 220, cardH = 140;
+    let cx = screenX + 16, cy = screenY - 20;
+    if (cx + cardW > innerWidth)  cx = screenX - cardW - 8;
+    if (cy + cardH > innerHeight) cy = innerHeight - cardH - 8;
+    bodyInfoCard.style.left = cx + 'px';
+    bodyInfoCard.style.top  = cy + 'px';
+    bodyInfoCard.style.display = 'block';
+}
+
+function hideBodyInfo() {
+    bodyInfoCard.style.display = 'none';
+    inspectedMeshIdx = -1;
+}
+
+bodyInfoClose?.addEventListener('click', hideBodyInfo);
+
+// 觀察模式下點擊天體
+const inspectRaycaster = new THREE.Raycaster();
+inspectRaycaster.params.Points = { threshold: 0.1 };
+
+window.addEventListener('click', e => {
+    if (interactionMode !== 'view') return;
+    if (e.target instanceof Element && e.target.closest('.pointer-events-auto')) return;
+    if (e.target === bodyInfoCard || bodyInfoCard.contains(e.target)) return;
+
+    const mx = (e.clientX / innerWidth) * 2 - 1;
+    const my = -(e.clientY / innerHeight) * 2 + 1;
+    inspectRaycaster.setFromCamera(new THREE.Vector2(mx, my), camera);
+
+    // 只對可見的 mesh 做 raycasting
+    const targets = meshes.filter((m, idx) => m.visible && mainThreadBodies[idx]?.m > 0);
+    const hits = inspectRaycaster.intersectObjects(targets, false);
+
+    if (hits.length > 0) {
+        const hitMesh = hits[0].object;
+        const meshIdx = meshes.indexOf(hitMesh);
+        if (meshIdx >= 0) {
+            showBodyInfo(meshIdx, e.clientX, e.clientY);
+            return;
+        }
+    }
+    // 點擊空白處關閉
+    hideBodyInfo();
+});
+
+// ── 暫停指示器 ──
+const pauseIndicator = document.getElementById('pause-indicator');
+
+function setPauseVisual(paused) {
+    if (pauseIndicator) pauseIndicator.style.display = paused ? 'flex' : 'none';
+    if (simTimeEl) simTimeEl.style.opacity = paused ? '0.35' : '1';
+}
 const placeCursor = document.getElementById('place-cursor');
 const cursorRing = document.getElementById('cursor-ring');
 const cursorLabel = document.getElementById('cursor-label');
@@ -467,6 +556,7 @@ window.addEventListener('keydown', e => {
         case ' ':
             e.preventDefault();
             simPaused = !simPaused;
+            setPauseVisual(simPaused);
             showToast(simPaused
                 ? '⏸ 模擬已暫停 <span class="kbd">Space</span> 繼續'
                 : '▶ 模擬繼續');
@@ -847,6 +937,23 @@ let pending = false;
 function animate() {
     requestAnimationFrame(animate);
     controls.update();
+
+    // 資訊卡即時更新
+    if (inspectedMeshIdx >= 0 && bodyInfoCard.style.display !== 'none') {
+        const b = mainThreadBodies[inspectedMeshIdx];
+        if (!b || b.m === 0) {
+            hideBodyInfo();
+        } else {
+            const speed = Math.sqrt((b.vx||0)**2 + (b.vy||0)**2 + (b.vz||0)**2);
+            const distSun = Math.sqrt(b.x**2 + b.y**2 + b.z**2);
+            cardRows.innerHTML =
+                makeCardRow('質量', `${b.m.toExponential(3)} M☉`) +
+                makeCardRow('速度', `${speed.toFixed(4)} AU/yr`) +
+                makeCardRow('距原點', `${distSun.toFixed(4)} AU`) +
+                makeCardRow('位置 X', `${b.x.toFixed(4)} AU`) +
+                makeCardRow('位置 Z', `${b.z.toFixed(4)} AU`);
+        }
+    }
 
     if (!pending && physics) {
         // 先處理待加入的天體（確保物理與視覺同步後再進行下一步模擬）
