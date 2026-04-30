@@ -115,6 +115,10 @@
             font-size: 12px;
             color: #fbbf24;
         }
+
+        /* 天體按鈕選中狀態 */
+        .celestial-btn { transition: all 0.15s ease; }
+        .celestial-btn.selected {
             background: rgba(255,255,255,0.18);
             border-color: rgba(255,255,255,0.5);
             box-shadow: 0 0 0 1px rgba(255,255,255,0.2);
@@ -269,7 +273,7 @@
                     <div class="flex items-center gap-2 mt-0.5">
                         <p class="text-xs text-gray-500">AU · M☉ · yr</p>
                         <span class="text-gray-700">·</span>
-                        <p class="text-xs text-gray-500">⏱ <span id="sim-time">0.00</span> yr</p>
+                        <p class="text-xs text-gray-500">⏱ <span id="sim-time">0.00 yr</span></p>
                         <span class="text-gray-700">·</span>
                         <p class="text-xs text-gray-500">🌐 <span id="body-count">—</span></p>
                     </div>

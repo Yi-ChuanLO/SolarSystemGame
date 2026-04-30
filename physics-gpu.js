@@ -11,7 +11,8 @@ const PARAMS_SIZE = 48; // 12 × f32/u32 (包含 subSteps 與 padding)
 const WGSL = /* wgsl */`
 const WG: u32 = 64u;
 const KS_FACTOR: f32 = 4.0;   // 合併半徑的 4 倍以內才啟用密集積分（原為 20，基準改為 R_MERGE_MIN 後需同步縮小）
-const R_MERGE_MIN: f32 = 1e-4; // 合併判斷半徑下限 (AU)，獨立於 EPS2，避免兩者耦合
+const R_MERGE_MIN: f32 = 1e-4; // 合併判斷半徑下限 (AU)，僅對大質量天體（mi+mj > 0.1 M☉）生效
+const MASS_COMPACT: f32 = 0.1; // 超過此質量才套用 R_MERGE_MIN（白矮星最小 ~0.17 M☉，行星最大 ~9.5e-4 M☉）
 
 struct Body { pos: vec4f, vel: vec4f, acc: vec4f };
 struct Params { 
@@ -92,7 +93,8 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
                     let d = sqrt(d2);
 
                     let Rs = 2.0 * P.G * (mi + mj) / P.C2;
-                    let R_merge = max(vi.w + vj.w, max(3.0 * Rs, R_MERGE_MIN));
+                    let r_min = select(0.0, R_MERGE_MIN, (mi + mj) > MASS_COMPACT);
+                    let R_merge = max(vi.w + vj.w, max(3.0 * Rs, r_min));
                     if (d < R_merge) {
                         if (mi < mj || (mi == mj && i > j)) {
                             swallowedBy[i] = i32(j);
@@ -305,7 +307,8 @@ fn initAccel(@builtin(local_invocation_id) lid: vec3u) {
 
         let vi = B[i].vel;
         let Rs = 2.0 * P.G * (mi + mj) / P.C2;
-        let R_merge = max(vi.w + vj.w, max(3.0 * Rs, R_MERGE_MIN));
+        let r_min = select(0.0, R_MERGE_MIN, (mi + mj) > MASS_COMPACT);
+        let R_merge = max(vi.w + vj.w, max(3.0 * Rs, r_min));
         if (d < R_merge) {
             mdt = P.MIN_DT;
             continue;

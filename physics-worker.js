@@ -12,7 +12,8 @@ let bodies = [];
 const BASE_DT = 0.0001;
 const MIN_DT  = 1e-8;
 const ETA     = 0.03;
-const R_MERGE_MIN = 1e-4; // 合併判斷半徑下限，與 WebGPU 後端一致
+const R_MERGE_MIN = 1e-4; // 合併判斷半徑下限，僅對大質量天體（mi+mj > 0.1 M☉）生效
+const MASS_COMPACT = 0.1; // 超過此質量才套用 R_MERGE_MIN（白矮星最小 ~0.17 M☉，行星最大 ~9.5e-4 M☉）
 let nextSafeDt = BASE_DT;
 let enableGR = false;
 let cValue = TRUE_C;
@@ -31,10 +32,10 @@ function physToKS(rx, ry, rz) {
     const r = Math.sqrt(rx*rx + ry*ry + rz*rz);
     if (r < 1e-30) return [0, 0, 0, 0];
     if (rx >= 0) {
-        const p = Math.sqrt(2.0 * (r + rx));
+        const p = Math.max(Math.sqrt(2.0 * (r + rx)), 1e-30);
         return [p / 2, ry / p, 0, rz / p];
     } else {
-        const p = Math.sqrt(2.0 * (r - rx));
+        const p = Math.max(Math.sqrt(2.0 * (r - rx)), 1e-30);
         return [ry / p, p / 2, rz / p, 0];
     }
 }
@@ -271,7 +272,8 @@ function computeAccelerations() {
 
             // 合併偵測 — 標記但不立即執行，確保力計算一致性
             const Rs = 2.0 * G * (bi.m + bj.m) / C2;
-            const R_merge = Math.max((bi.radius || 0) + (bj.radius || 0), Math.max(3.0 * Rs, R_MERGE_MIN));
+            const r_min = (bi.m + bj.m) > MASS_COMPACT ? R_MERGE_MIN : 0.0;
+            const R_merge = Math.max((bi.radius || 0) + (bj.radius || 0), Math.max(3.0 * Rs, r_min));
             if (dist < R_merge) {
                 if (bi.m < bj.m) { if (mergeTargets[i] < 0) mergeTargets[i] = j; }
                 else             { if (mergeTargets[j] < 0) mergeTargets[j] = i; }

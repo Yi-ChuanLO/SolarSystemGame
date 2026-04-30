@@ -117,19 +117,11 @@ for (const [name, pi, a, m, i, O, nu, color, radius, physicalRadius] of moonDefs
 }
 
 // 3) 矮行星
-const plutoIdx = initialBodiesData.length; // 記住冥王星索引供 Charon 使用
 for (const [name, a, e, m, i, O, color, radius, physicalRadius] of dwarfDefs) {
     const state = periOrbit(a, e, i, O, M_SUN);
     initialBodiesData.push({ name, m, ...state, color, radius, physicalRadius });
 }
-
-// 4) Charon (繞冥王星的衛星, 傾角 ≈119.6°)
-{
-    const pluto = initialBodiesData[plutoIdx];
-    const parentState = { x: pluto.x, y: pluto.y, z: pluto.z, vx: pluto.vx, vy: pluto.vy, vz: pluto.vz };
-    const charonState = moonState(parentState, 1.313e-4, 119.6, 0, 0, pluto.m);
-    initialBodiesData.push({ name: '凱倫', m: 8.04e-10, ...charonState, color: 0xaaaaaa, radius: 0.0006, physicalRadius: 4.05e-6 });
-}
+// 注：凱倫（冥王星衛星）因希爾球在 N-body 全域積分下不穩定，已移除
 
 // 準備物理狀態 + 歸零質心速度
 const physicsState = initialBodiesData.map(b => ({ m: b.m, x: b.x, y: b.y, z: b.z, vx: b.vx, vy: b.vy, vz: b.vz, ax: 0, ay: 0, az: 0, radius: b.physicalRadius }));
@@ -301,14 +293,14 @@ let simTimeYears = 0;
 const simTimeEl = document.getElementById('sim-time');
 const bodyCountEl = document.getElementById('body-count');
 
-function updateSimStats(steps, dt) {
-    // dt 單位為年，steps 為本幀子步數
-    // 用 BASE_DT 作為每步的近似時間（實際 dt 由物理引擎自適應，這裡只做視覺估算）
-    simTimeYears += steps * (dt || 0.0001);
+function updateSimStats(steps) {
+    // 用 BASE_DT 作為每步的近似時間上限（實際 dt 由物理引擎自適應，此為估算值）
+    simTimeYears += steps * 0.0001;
     if (simTimeEl) {
-        simTimeEl.innerText = simTimeYears < 1000
-            ? simTimeYears.toFixed(2)
-            : (simTimeYears / 1000).toFixed(2) + 'k';
+        const label = simTimeYears < 1000
+            ? simTimeYears.toFixed(2) + ' yr'
+            : (simTimeYears / 1000).toFixed(2) + 'k yr';
+        simTimeEl.innerText = label;
     }
 }
 
@@ -452,7 +444,6 @@ bodyInfoClose?.addEventListener('click', hideBodyInfo);
 
 // 觀察模式下點擊天體
 const inspectRaycaster = new THREE.Raycaster();
-inspectRaycaster.params.Points = { threshold: 0.1 };
 
 window.addEventListener('click', e => {
     if (interactionMode !== 'view') return;
@@ -516,18 +507,18 @@ function setMode(mode) {
     interactionMode = mode;
     if (mode === 'view') {
         controls.enabled = true;
-        modeViewBtn.className = 'mode-btn flex-1 py-2 px-3 rounded-lg text-xs font-semibold border transition-all mode-btn-active';
-        modePlaceBtn.className = 'mode-btn flex-1 py-2 px-3 rounded-lg text-xs font-semibold border transition-all mode-btn-inactive';
+        modeViewBtn.className = 'mode-btn flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold border transition-all mode-btn-active';
+        modePlaceBtn.className = 'mode-btn flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold border transition-all mode-btn-inactive';
         tipText.innerText = '💡 觀察模式：左鍵旋轉 · 右鍵平移 · 滾輪縮放';
         if (placeCursor) placeCursor.style.display = 'none';
-        document.body.style.cursor = '';
+        document.getElementById('canvas-container').style.cursor = '';
     } else {
         controls.enabled = false;
-        modePlaceBtn.className = 'mode-btn flex-1 py-2 px-3 rounded-lg text-xs font-semibold border transition-all mode-btn-active';
-        modeViewBtn.className = 'mode-btn flex-1 py-2 px-3 rounded-lg text-xs font-semibold border transition-all mode-btn-inactive';
+        modePlaceBtn.className = 'mode-btn flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold border transition-all mode-btn-active';
+        modeViewBtn.className = 'mode-btn flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold border transition-all mode-btn-inactive';
         tipText.innerText = '💡 放置模式：點擊畫面放置天體';
         if (placeCursor) placeCursor.style.display = 'block';
-        document.body.style.cursor = 'none';
+        document.getElementById('canvas-container').style.cursor = 'none';
         updateCursorStyle();
     }
 }
@@ -613,7 +604,7 @@ function updateCameraOptions() {
     const groups = [
         ['☀ 恆星與行星', 0, nPlanets],
         ['🌙 衛星', nPlanets, nPlanets + nMoons],
-        ['🪨 矮行星', nPlanets + nMoons, nPlanets + nMoons + nDwarfs + 1], // +1 for Charon
+        ['🪨 矮行星', nPlanets + nMoons, nPlanets + nMoons + nDwarfs],
     ];
     for (const [label, start, end] of groups) {
         const grp = document.createElement('optgroup');
