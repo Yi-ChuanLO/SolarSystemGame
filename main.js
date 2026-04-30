@@ -62,19 +62,23 @@ const planetDefs = [
 
 // ── 衛星資料 ──
 // [name, parentIdx, a(AU), mass(M☉), i(°), Ω(°), ν(°), color, radius, physicalRadius]
+// 傾角 i 為相對黃道面；天王星衛星因天王星軸傾 97.77° 故 i≈97.8°
+// 土星衛星傾角為相對黃道面（土星赤道傾角 26.73°，衛星相對赤道傾角極小，
+//   故相對黃道面傾角 ≈ 26.73° + 衛星自身傾角，此處取近似值）
 const moonDefs = [
     // 地球系
     ['月球', 3, 2.570e-3, 3.69e-8, 5.145, 125.0, 0, 0xcccccc, 0.0008, 1.16e-5],
     // 木星系 (排除 Io 以維持效能)
-    ['Europa', 5, 4.485e-3, 2.41e-8, 1.79, 0, 0, 0xccddff, 0.0008, 1.05e-5],
-    ['Ganymede', 5, 7.155e-3, 7.45e-8, 2.21, 0, 120, 0xbbaa88, 0.001, 1.76e-5],
-    ['Callisto', 5, 1.259e-2, 5.41e-8, 2.02, 0, 240, 0x887766, 0.0008, 1.61e-5],
-    // 土星系
-    ['Titan', 6, 8.168e-3, 6.76e-8, 27.0, 0, 0, 0xff8833, 0.001, 1.72e-5],
-    ['Rhea', 6, 3.522e-3, 1.16e-9, 27.0, 0, 180, 0xddddcc, 0.0006, 5.10e-6],
-    // 天王星系 (軌道近垂直黃道面, i≈97.8°)
-    ['Titania', 7, 2.917e-3, 1.76e-9, 97.8, 0, 0, 0xaabbcc, 0.0006, 5.27e-6],
-    ['Oberon', 7, 3.900e-3, 1.46e-9, 97.8, 0, 180, 0x998877, 0.0006, 5.09e-6],
+    ['Europa',   5, 4.485e-3, 2.41e-8, 1.79, 0,   0,   0xccddff, 0.0008, 1.05e-5],
+    ['Ganymede', 5, 7.155e-3, 7.45e-8, 2.21, 0,   120, 0xbbaa88, 0.001,  1.76e-5],
+    ['Callisto', 5, 1.259e-2, 5.41e-8, 2.02, 0,   240, 0x887766, 0.0008, 1.61e-5],
+    // 土星系 (傾角相對黃道面：土星軸傾 26.73° + 衛星相對赤道傾角)
+    // Titan 相對赤道傾角 0.33° → 相對黃道 ≈ 27.06°；Rhea ≈ 26.73°
+    ['Titan', 6, 8.168e-3, 6.76e-8, 27.1, 0,   0,   0xff8833, 0.001,  1.72e-5],
+    ['Rhea',  6, 3.522e-3, 1.16e-9, 26.7, 0,   180, 0xddddcc, 0.0006, 5.10e-6],
+    // 天王星系 (軌道近垂直黃道面, i≈97.77°；升交點錯開 90° 避免軌道面完全重疊)
+    ['Titania', 7, 2.917e-3, 1.76e-9, 97.8, 0,   0,   0xaabbcc, 0.0006, 5.27e-6],
+    ['Oberon',  7, 3.900e-3, 1.46e-9, 97.8, 90,  180, 0x998877, 0.0006, 5.09e-6],
     // 海王星系 (逆行軌道, i≈157°)
     ['Triton', 8, 2.371e-3, 1.08e-8, 157.0, 0, 0, 0xaaddff, 0.0008, 9.04e-6],
 ];
@@ -669,14 +673,12 @@ function animate() {
                     pending = false;
                     return; // 丟棄過期資料
                 }
-                if (!result.pended) {
-                    updateVisuals(result.positions, result.masses, result.velocities);
-                    if (mergerHappened) {
-                        initialEnergy = null; // 合併屬非彈性碰撞，總能量會折損，必須重設基準點
-                        mergerHappened = false;
-                    }
-                    if (result.velocities) calcSystemEnergy(result.positions, result.velocities, result.masses);
+                updateVisuals(result.positions, result.masses, result.velocities);
+                if (mergerHappened) {
+                    initialEnergy = null; // 合併屬非彈性碰撞，總能量會折損，必須重設基準點
+                    mergerHappened = false;
                 }
+                if (result.velocities) calcSystemEnergy(result.positions, result.velocities, result.masses);
                 pending = false;
             });
         }

@@ -5,13 +5,14 @@
 // ═══════════════════════════════════════════════════════════════
 
 const G = 4 * Math.pow(Math.PI, 2);       // AU³/(M☉·yr²)
-const EPSILON_SQ = 1e-10;
+const EPSILON_SQ = 1e-12;                 // 與 WebGPU 後端一致
 const TRUE_C = 63239.7263;                 // AU/yr
 
 let bodies = [];
 const BASE_DT = 0.0001;
 const MIN_DT  = 1e-8;
 const ETA     = 0.03;
+const R_MERGE_MIN = 1e-4; // 合併判斷半徑下限，與 WebGPU 後端一致
 let nextSafeDt = BASE_DT;
 let enableGR = false;
 let cValue = TRUE_C;
@@ -20,7 +21,7 @@ let C2 = cValue * cValue;
 // ────────────────── KS 正則化 (Kustaanheimo-Stiefel) ──────────────────
 // 將密近雙星的 1/r² 奇異力轉換為 4D 諧振子，在虛擬時間 τ 中積分
 // 參考: Stiefel & Scheifele (1971), Aarseth "Gravitational N-Body Simulations" (2003)
-const KS_FACTOR = 20.0;   // 當 dist < KS_FACTOR * R_merge 時啟動正則化
+const KS_FACTOR = 4.0;    // 與 WebGPU 後端一致（合併半徑的 4 倍以內啟動正則化）
 const KS_MAX_SUB = 64;    // 虛擬時間子步上限
 let ksActivePairs = [];    // 目前活躍的 KS 對 [{ia, ib}]
 
@@ -266,7 +267,7 @@ function computeAccelerations() {
 
             // 合併偵測 — 標記但不立即執行，確保力計算一致性
             const Rs = 2.0 * G * (bi.m + bj.m) / C2;
-            const R_merge = Math.max((bi.radius || 0) + (bj.radius || 0), Math.max(3.0 * Rs, Math.sqrt(EPSILON_SQ)));
+            const R_merge = Math.max((bi.radius || 0) + (bj.radius || 0), Math.max(3.0 * Rs, R_MERGE_MIN));
             if (dist < R_merge) {
                 if (bi.m < bj.m) { if (mergeTargets[i] < 0) mergeTargets[i] = j; }
                 else             { if (mergeTargets[j] < 0) mergeTargets[j] = i; }
@@ -402,13 +403,14 @@ function computeAccelerations() {
     let targetDt = Math.max(Math.min(safeDt, BASE_DT), MIN_DT);
     if (!Number.isFinite(targetDt)) targetDt = MIN_DT;
     // Shrink immediately for close encounters; smooth only growth.
+    // 增長速率限制為 ×1.2/步，與 WebGPU 後端一致
     const prevDt = nextSafeDt;
     if (targetDt < prevDt) {
         nextSafeDt = targetDt;
     } else {
         const ratio = targetDt / Math.max(prevDt, 1e-20);
         nextSafeDt = Math.max(prevDt * Math.pow(ratio, 0.3), MIN_DT);
-        nextSafeDt = Math.min(nextSafeDt, prevDt * 2.0, BASE_DT);
+        nextSafeDt = Math.min(nextSafeDt, prevDt * 1.2, BASE_DT);
     }
 }
 

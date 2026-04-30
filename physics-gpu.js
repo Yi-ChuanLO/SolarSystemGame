@@ -10,7 +10,8 @@ const PARAMS_SIZE = 48; // 12 × f32/u32 (包含 subSteps 與 padding)
 // ────────────────────────── WGSL 著色器 ──────────────────────────
 const WGSL = /* wgsl */`
 const WG: u32 = 64u;
-const KS_FACTOR: f32 = 20.0;  // GPU 側近距交會偵測閾值 (對應 CPU 端 KS 正則化)
+const KS_FACTOR: f32 = 4.0;   // 合併半徑的 4 倍以內才啟用密集積分（原為 20，基準改為 R_MERGE_MIN 後需同步縮小）
+const R_MERGE_MIN: f32 = 1e-4; // 合併判斷半徑下限 (AU)，獨立於 EPS2，避免兩者耦合
 
 struct Body { pos: vec4f, vel: vec4f, acc: vec4f };
 struct Params { 
@@ -26,7 +27,7 @@ struct Dt { cur: u32, next: atomic<u32> };
 
 // 宣告 Workgroup Shared Memory，用以加速 subSteps 迴圈
 var<workgroup> sB: array<Body, WG>;
-var<workgroup> sDtCur: f32;
+var<workgroup> sDtDrift: f32; // 本步 Kick1+Drift+Kick2 實際使用的 dt
 var<workgroup> sDtNext: atomic<u32>;
 var<workgroup> swallowedBy: array<i32, WG>;
 
@@ -48,14 +49,14 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
     for (var step = 0u; step < P.subSteps; step++) {
         // --- Swap DT ---
         if (i == 0) {
-            sDtCur = bitcast<f32>(atomicLoad(&sDtNext));
+            sDtDrift = bitcast<f32>(atomicLoad(&sDtNext)); // 本步所有階段使用的 dt
             atomicStore(&sDtNext, bitcast<u32>(P.BASE_DT));
         }
         workgroupBarrier();
 
         // --- Kick 1 & Drift ---
         if (i < N) {
-            let step_f = sDtCur;
+            let step_f = sDtDrift; // 使用本步確定的 dt
             var v = sB[i].vel.xyz + 0.5 * sB[i].acc.xyz * step_f;
             var p = sB[i].pos.xyz + v * step_f;
             var m = sB[i].pos.w;
@@ -91,7 +92,7 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
                     let d = sqrt(d2);
 
                     let Rs = 2.0 * P.G * (mi + mj) / P.C2;
-                    let R_merge = max(vi.w + vj.w, max(3.0 * Rs, sqrt(P.EPS2)));
+                    let R_merge = max(vi.w + vj.w, max(3.0 * Rs, R_MERGE_MIN));
                     if (d < R_merge) {
                         if (mi < mj || (mi == mj && i > j)) {
                             swallowedBy[i] = i32(j);
@@ -117,7 +118,7 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
                     // 等效於 CPU 端 KS 正則化在近心點的密集子步效果
                     let R_ks = KS_FACTOR * R_merge;
                     if (d < R_ks) {
-                        mdt = min(mdt, P.ETA * 0.1 * sqrt(d * d2 / (P.G * (mi+mj))));
+                        mdt = min(mdt, P.ETA * 0.05 * sqrt(d * d2 / (P.G * (mi+mj))));
                     }
 
                     var g = P.G * id3 * mj * r;
@@ -139,7 +140,10 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
             
             if (swallowedBy[i] < 0 && mi > 0.0) {
                 sB[i].acc = vec4f(acc, 0.0);
-                atomicMin(&sDtNext, bitcast<u32>(max(mdt, P.MIN_DT)));
+                // NaN/Inf 保護：mdt 異常時不更新 dt，避免 atomicMin(bitcast(NaN)) 語義錯誤
+                if (mdt > 0.0 && mdt < 1e38) {
+                    atomicMin(&sDtNext, bitcast<u32>(max(mdt, P.MIN_DT)));
+                }
             }
         }
         workgroupBarrier();
@@ -225,23 +229,36 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
         workgroupBarrier();
 
         // Shrink immediately for close encounters; smooth only growth.
+        // 增長速率限制為 ×1.2/步，避免近距交會後 dt 在少數子步內暴增
         if (i == 0) {
             let targetDt = max(min(bitcast<f32>(atomicLoad(&sDtNext)), P.BASE_DT), P.MIN_DT);
             var nextDt = targetDt;
-            if (targetDt >= sDtCur) {
-                let ratio = targetDt / max(sDtCur, 1e-20);
-                nextDt = max(sDtCur * pow(ratio, 0.3), P.MIN_DT);
-                nextDt = min(nextDt, min(sDtCur * 2.0, P.BASE_DT));
+            if (targetDt >= sDtDrift) {
+                let ratio = targetDt / max(sDtDrift, 1e-20);
+                nextDt = max(sDtDrift * pow(ratio, 0.3), P.MIN_DT);
+                nextDt = min(nextDt, min(sDtDrift * 1.2, P.BASE_DT));  // 每步最多 ×1.2
             }
             atomicStore(&sDtNext, bitcast<u32>(nextDt));
         }
         workgroupBarrier();
 
         // --- Kick 2 ---
-        if (i < N) {
-            let step_f = sDtCur;
-            let v = sB[i].vel.xyz + 0.5 * sB[i].acc.xyz * step_f;
-            sB[i].vel = vec4f(v, sB[i].vel.w);
+        // 必須使用 sDtDrift（本步 Drift 實際走的 dt），與 Kick1 配對保持辛結構
+        // 注意：若本步 dt 對近心點偏大，誤差由下一步的縮小 dt 自然修正；
+        // 不在此截斷速度，截斷會造成位置/速度不一致，破壞積分序列。
+        if (i < N && swallowedBy[i] < 0 && sB[i].pos.w > 0.0) {
+            let step_f = sDtDrift;
+            let v_new = sB[i].vel.xyz + 0.5 * sB[i].acc.xyz * step_f;
+
+            // 近心點過大步長偵測：單步速度變化超過當前速度 50% 時，
+            // 強制下一步縮到 MIN_DT，讓積分器在更小步長下重新通過近心點。
+            // 本步速度仍正常更新，避免位置/速度不一致。
+            let dv_mag = 0.5 * length(sB[i].acc.xyz) * step_f;
+            let v_mag = length(sB[i].vel.xyz) + 1e-30;
+            if (dv_mag > 0.5 * v_mag) {
+                atomicMin(&sDtNext, bitcast<u32>(P.MIN_DT));
+            }
+            sB[i].vel = vec4f(v_new, sB[i].vel.w);
         }
         workgroupBarrier();
     }
@@ -251,7 +268,7 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
         B[i] = sB[i];
     }
     if (i == 0) {
-        dt.cur = bitcast<u32>(sDtCur);
+        dt.cur = bitcast<u32>(sDtDrift);
         atomicStore(&dt.next, atomicLoad(&sDtNext));
     }
 }
@@ -288,7 +305,7 @@ fn initAccel(@builtin(local_invocation_id) lid: vec3u) {
 
         let vi = B[i].vel;
         let Rs = 2.0 * P.G * (mi + mj) / P.C2;
-        let R_merge = max(vi.w + vj.w, max(3.0 * Rs, sqrt(P.EPS2)));
+        let R_merge = max(vi.w + vj.w, max(3.0 * Rs, R_MERGE_MIN));
         if (d < R_merge) {
             mdt = P.MIN_DT;
             continue;
@@ -303,7 +320,7 @@ fn initAccel(@builtin(local_invocation_id) lid: vec3u) {
 
         let R_ks = KS_FACTOR * R_merge;
         if (d < R_ks) {
-            mdt = min(mdt, P.ETA * 0.1 * sqrt(d * d2 / (P.G * (mi + mj))));
+            mdt = min(mdt, P.ETA * 0.05 * sqrt(d * d2 / (P.G * (mi + mj))));
         }
 
         var g = P.G * id3 * mj * r;
@@ -319,7 +336,10 @@ fn initAccel(@builtin(local_invocation_id) lid: vec3u) {
         acc = ia_t;
     }
     B[i].acc = vec4f(acc, 0.0);
-    atomicMin(&dt.next, bitcast<u32>(max(mdt, P.MIN_DT)));
+    // NaN/Inf 保護：與 simulateSubsteps 一致
+    if (mdt > 0.0 && mdt < 1e38) {
+        atomicMin(&dt.next, bitcast<u32>(max(mdt, P.MIN_DT)));
+    }
 }
 `;
 
@@ -450,12 +470,13 @@ export class WebGPUPhysics {
                 out.velocities[i*3+2] = raw[i*12+6];
             }
             currentReadBuf.unmap();
-            return { 
+            const result = { 
                 positions: out.positions.subarray(0, currentN * 3), 
                 velocities: out.velocities.subarray(0, currentN * 3), 
                 masses: out.masses.subarray(0, currentN),
                 version: currentVersion
             };
+            return result;
         }).catch(e => {
             console.error('GPU readback failed:', e);
             return { 
@@ -471,7 +492,9 @@ export class WebGPUPhysics {
         if (this.pendingReads.length >= this.NUM_BUFFERS) {
             return await this.pendingReads.shift();
         } else {
-            return { pended: true };
+            // 預熱期間：直接回傳當前幀，不累積佇列延遲
+            this.pendingReads.pop();
+            return await readPromise;
         }
     }
 
@@ -521,7 +544,7 @@ export class WebGPUPhysics {
         const f = new Float32Array(buf);
         const u = new Uint32Array(buf);
         f[0] = G;           // G
-        f[1] = 1e-10;       // EPSILON_SQ
+        f[1] = 1e-12;       // EPSILON_SQ (軟化長度 ~1e-6 AU，遠小於合併半徑 1e-4 AU，避免力計算灰色地帶)
         f[2] = 0.0001;      // BASE_DT
         f[3] = 1e-8;        // MIN_DT
         f[4] = 0.03;        // ETA
