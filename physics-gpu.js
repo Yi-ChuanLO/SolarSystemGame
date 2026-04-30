@@ -65,7 +65,7 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
                 m = 0.0; // Zero out mass for out-of-bounds or swallowed objects
             }
             sB[i].pos = vec4f(p, m);
-            sB[i].vel = vec4f(v, 0.0);
+            sB[i].vel = vec4f(v, sB[i].vel.w);
         }
         workgroupBarrier();
 
@@ -160,22 +160,24 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
             workgroupBarrier();
         }
 
-        // --- 質量與動量守恆合併 ---
+        // --- 質量、動量守恆與體積合併 ---
         if (i < N && swallowedBy[i] < 0 && sB[i].pos.w > 0.0) {
             var totalM = sB[i].pos.w;
             var totalP = sB[i].vel.xyz * totalM;
             var totalPos = sB[i].pos.xyz * totalM;
+            var totalR3 = pow(sB[i].vel.w, 3.0);
             for (var k = 0u; k < N; k++) {
                 if (swallowedBy[k] == i32(i)) {
                     let km = sB[k].pos.w;
                     totalP += sB[k].vel.xyz * km;
                     totalPos += sB[k].pos.xyz * km;
                     totalM += km;
+                    totalR3 += pow(sB[k].vel.w, 3.0);
                 }
             }
             if (totalM > sB[i].pos.w) {
                 sB[i].pos = vec4f(totalPos / totalM, totalM);
-                sB[i].vel = vec4f(totalP / totalM, 0.0);
+                sB[i].vel = vec4f(totalP / totalM, pow(totalR3, 1.0 / 3.0));
             }
         }
         workgroupBarrier();
@@ -237,7 +239,7 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
         if (i < N) {
             let step_f = sDtCur;
             let v = sB[i].vel.xyz + 0.5 * sB[i].acc.xyz * step_f;
-            sB[i].vel = vec4f(v, 0.0);
+            sB[i].vel = vec4f(v, sB[i].vel.w);
         }
         workgroupBarrier();
     }
@@ -319,8 +321,17 @@ export class WebGPUPhysics {
             });
         }
         this.pipelines = {};
+        this.stateVersion = 0;
+        this._enableGR = false;
+        this._C2 = 63239.7263 * 63239.7263;
+    }
+
+    get version() { return this.stateVersion; }
 
     async init(bodies) {
+        if (bodies.length > MAX_BODIES) {
+            throw new Error(`WebGPU backend supports at most ${MAX_BODIES} bodies`);
+        }
         const adapter = await navigator.gpu.requestAdapter();
         if (!adapter) throw new Error('No WebGPU adapter');
         this.device = await adapter.requestDevice();
@@ -412,6 +423,7 @@ export class WebGPUPhysics {
         this.device.queue.submit([enc.finish()]);
 
         const currentN = this.N; // capture for the closure
+        const currentVersion = this.stateVersion;
         const readPromise = currentReadBuf.mapAsync(GPUMapMode.READ).then(() => {
             const raw = new Float32Array(currentReadBuf.getMappedRange());
             for (let i = 0; i < currentN; i++) {
@@ -427,14 +439,16 @@ export class WebGPUPhysics {
             return { 
                 positions: out.positions.subarray(0, currentN * 3), 
                 velocities: out.velocities.subarray(0, currentN * 3), 
-                masses: out.masses.subarray(0, currentN) 
+                masses: out.masses.subarray(0, currentN),
+                version: currentVersion
             };
         }).catch(e => {
             console.error('GPU readback failed:', e);
             return { 
                 positions: out.positions.subarray(0, currentN * 3), 
                 velocities: out.velocities.subarray(0, currentN * 3), 
-                masses: out.masses.subarray(0, currentN) 
+                masses: out.masses.subarray(0, currentN),
+                version: currentVersion
             };
         });
 
@@ -449,6 +463,7 @@ export class WebGPUPhysics {
 
     async addBody(body) {
         if (this.N >= MAX_BODIES) return { ok: false, reason: `WebGPU 後端最多支援 ${MAX_BODIES} 個天體` };
+        this.stateVersion++;
         const o = this.N * 12;
         const d = new Float32Array(12);
         d[0]=body.x; d[1]=body.y; d[2]=body.z; d[3]=body.m;
@@ -471,6 +486,7 @@ export class WebGPUPhysics {
     }
 
     updateSettings({ enableGR, cScale }) {
+        this.stateVersion++;
         this._enableGR = enableGR;
         const c = 63239.7263 * (enableGR ? cScale : 1.0);
         this._C2 = c * c;

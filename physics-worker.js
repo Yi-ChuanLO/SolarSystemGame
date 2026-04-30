@@ -236,16 +236,23 @@ self.onmessage = function(e) {
     }
 };
 
+let mergeTargets = new Int32Array(0);
+let ksFlags = new Uint8Array(0);
+
 function computeAccelerations() {
     const N = bodies.length;
+    if (mergeTargets.length < N) {
+        mergeTargets = new Int32Array(N);
+        ksFlags = new Uint8Array(N);
+    }
+    
     for (let i = 0; i < N; i++) { bodies[i].ax = 0; bodies[i].ay = 0; bodies[i].az = 0; }
     let safeDt = BASE_DT;
     ksActivePairs = [];  // 重置 KS 對列表
-    const ksSet = new Set(); // 追蹤已經在 KS 對中的天體，防止重複加入
-
+    
     // ── Phase 1: 計算所有力 + 偵測合併 (基於一致的狀態快照) ──
-    const mergeTargets = new Int32Array(N);
-    mergeTargets.fill(-1);
+    mergeTargets.fill(-1, 0, N);
+    ksFlags.fill(0, 0, N);
 
     for (let i = 0; i < N; i++) {
         if (bodies[i].m === 0) continue;
@@ -269,10 +276,10 @@ function computeAccelerations() {
             // 跳過直接力計算，改由 verletStep 中的 ksSubIntegrate 處理
             const R_ks = KS_FACTOR * R_merge;
             if (dist < R_ks) {
-                if (!ksSet.has(i) && !ksSet.has(j)) {
+                if (ksFlags[i] === 0 && ksFlags[j] === 0) {
                     ksActivePairs.push({ ia: i, ib: j });
-                    ksSet.add(i);
-                    ksSet.add(j);
+                    ksFlags[i] = 1;
+                    ksFlags[j] = 1;
                     continue; // KS 對跳過直接力計算，由子步積分處理
                 }
                 // 若已有天體在其他 KS 對中，則降級為直接力計算，仰賴自適應步長
@@ -323,6 +330,7 @@ function computeAccelerations() {
         let tposx = bodies[i].m * bodies[i].x;
         let tposy = bodies[i].m * bodies[i].y;
         let tposz = bodies[i].m * bodies[i].z;
+        let totalR3 = Math.pow(bodies[i].radius || 0, 3);
         for (let k = 0; k < N; k++) {
             if (mergeTargets[k] === i) {
                 totalM += bodies[k].m;
@@ -332,6 +340,7 @@ function computeAccelerations() {
                 tposx += bodies[k].m * bodies[k].x;
                 tposy += bodies[k].m * bodies[k].y;
                 tposz += bodies[k].m * bodies[k].z;
+                totalR3 += Math.pow(bodies[k].radius || 0, 3);
             }
         }
         if (totalM > bodies[i].m) {
@@ -342,6 +351,7 @@ function computeAccelerations() {
             bodies[i].y = tposy / totalM;
             bodies[i].z = tposz / totalM;
             bodies[i].m = totalM;
+            bodies[i].radius = Math.cbrt(totalR3);
         }
     }
 

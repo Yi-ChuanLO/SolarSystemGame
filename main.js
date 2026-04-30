@@ -194,7 +194,8 @@ initialBodiesData.forEach(createBodyVisual);
 
 // Worker fallback 封裝
 class WorkerPhysics {
-    constructor() { this.worker = null; this._resolve = null; this._addResolve = null; }
+    constructor() { this.worker = null; this._resolve = null; this._addResolve = null; this.stateVersion = 0; }
+    get version() { return this.stateVersion; }
     async init(bodies) {
         this.worker = new Worker('physics-worker.js');
         // 等待 Worker 完成初始化（含加速度計算）後再繼續
@@ -219,9 +220,9 @@ class WorkerPhysics {
             }
         };
     }
-    step(n) { return new Promise(r => { this._resolve = r; this.worker.postMessage({ type: 'step', steps: n }); }); }
-    addBody(b) { return new Promise(r => { this._addResolve = r; this.worker.postMessage({ type: 'add', body: b }); }); }
-    updateSettings(s) { this.worker.postMessage({ type: 'update_settings', ...s }); }
+    step(n) { const v = this.stateVersion; return new Promise(r => { this._resolve = data => r({ ...data, version: v }); this.worker.postMessage({ type: 'step', steps: n }); }); }
+    addBody(b) { this.stateVersion++; return new Promise(r => { this._addResolve = r; this.worker.postMessage({ type: 'add', body: b }); }); }
+    updateSettings(s) { this.stateVersion++; this.worker.postMessage({ type: 'update_settings', ...s }); }
 }
 
 let physics;
@@ -597,6 +598,10 @@ function animate() {
             pending = true;
             const steps = parseInt(speedSlider.value);
             physics.step(steps).then(result => {
+                if (result.version !== undefined && result.version !== physics.version) {
+                    pending = false;
+                    return; // 丟棄過期資料
+                }
                 if (!result.pended) {
                     updateVisuals(result.positions, result.masses);
                     if (mergerHappened) {
