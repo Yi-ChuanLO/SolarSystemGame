@@ -279,8 +279,10 @@ async function initPhysics() {
         console.log('✅ CPU Worker physics initialized (fallback)');
     } catch (e) {
         console.error('❌ All physics backends failed:', e);
-        const desc = document.querySelector('#ui-content p');
-        if (desc) desc.innerHTML = '❌ <span class="text-red-400">物理引擎初始化失敗</span>，請檢查瀏覽器相容性或重新整理頁面。';
+        const dot = document.getElementById('backend-dot');
+        const status = document.getElementById('backend-status');
+        if (dot) { dot.classList.remove('gray', 'pulse'); dot.classList.add('red'); }
+        if (status) status.innerHTML = '❌ <span class="text-red-400">物理引擎初始化失敗</span>';
         backendName = 'None';
         throw e;
     }
@@ -294,6 +296,128 @@ toggleUiBtn.addEventListener('click', () => {
     toggleUiBtn.innerText = uiContent.classList.contains('hidden') ? '🔼' : '🔽';
 });
 
+// ── 模擬時間計數器 ──
+let simTimeYears = 0;
+const simTimeEl = document.getElementById('sim-time');
+const bodyCountEl = document.getElementById('body-count');
+
+function updateSimStats(steps, dt) {
+    // dt 單位為年，steps 為本幀子步數
+    // 用 BASE_DT 作為每步的近似時間（實際 dt 由物理引擎自適應，這裡只做視覺估算）
+    simTimeYears += steps * (dt || 0.0001);
+    if (simTimeEl) {
+        simTimeEl.innerText = simTimeYears < 1000
+            ? simTimeYears.toFixed(2)
+            : (simTimeYears / 1000).toFixed(2) + 'k';
+    }
+}
+
+function updateBodyCount() {
+    if (!bodyCountEl) return;
+    const active = mainThreadBodies.filter(b => b.m > 0).length;
+    const total = 64; // MAX_BODIES
+    bodyCountEl.innerText = `${active}/${total}`;
+}
+
+// ── 能量趨勢圖 ──
+const energyChartCanvas = document.getElementById('energy-chart');
+const energyCtx = energyChartCanvas ? energyChartCanvas.getContext('2d') : null;
+const CHART_POINTS = 60;
+const energyHistory = [];
+
+function updateEnergyChart(driftPct) {
+    if (!energyCtx) return;
+    energyHistory.push(driftPct);
+    if (energyHistory.length > CHART_POINTS) energyHistory.shift();
+
+    const w = energyChartCanvas.width;
+    const h = energyChartCanvas.height;
+    energyCtx.clearRect(0, 0, w, h);
+
+    if (energyHistory.length < 2) return;
+
+    const maxVal = Math.max(...energyHistory, 0.001);
+    const step = w / (CHART_POINTS - 1);
+
+    // 背景格線
+    energyCtx.strokeStyle = 'rgba(255,255,255,0.04)';
+    energyCtx.lineWidth = 1;
+    energyCtx.beginPath();
+    energyCtx.moveTo(0, h / 2); energyCtx.lineTo(w, h / 2);
+    energyCtx.stroke();
+
+    // 折線顏色依誤差等級
+    const lastVal = energyHistory[energyHistory.length - 1];
+    const lineColor  = lastVal > 1 ? '#f87171' : lastVal > 0.01 ? '#fbbf24' : '#4ade80';
+    const fillColor  = lastVal > 1 ? 'rgba(248,113,113,0.2)' : lastVal > 0.01 ? 'rgba(251,191,36,0.2)' : 'rgba(74,222,128,0.2)';
+
+    // 填充漸層
+    const grad = energyCtx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, fillColor);
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+
+    energyCtx.beginPath();
+    energyHistory.forEach((v, idx) => {
+        const x = idx * step;
+        const y = h - (v / maxVal) * (h - 2) - 1;
+        idx === 0 ? energyCtx.moveTo(x, y) : energyCtx.lineTo(x, y);
+    });
+    energyCtx.lineTo((energyHistory.length - 1) * step, h);
+    energyCtx.lineTo(0, h);
+    energyCtx.closePath();
+    energyCtx.fillStyle = grad;
+    energyCtx.fill();
+
+    // 折線本體
+    energyCtx.beginPath();
+    energyCtx.strokeStyle = lineColor;
+    energyCtx.lineWidth = 1.5;
+    energyCtx.lineJoin = 'round';
+    energyHistory.forEach((v, idx) => {
+        const x = idx * step;
+        const y = h - (v / maxVal) * (h - 2) - 1;
+        idx === 0 ? energyCtx.moveTo(x, y) : energyCtx.lineTo(x, y);
+    });
+    energyCtx.stroke();
+}
+
+// ── Toast 通知系統 ──
+const toastContainer = document.getElementById('toast-container');
+
+function showToast(html, durationMs = 3000) {
+    if (!toastContainer) return;
+    const el = document.createElement('div');
+    el.className = 'toast';
+    el.innerHTML = html;
+    toastContainer.appendChild(el);
+    setTimeout(() => {
+        el.classList.add('removing');
+        el.addEventListener('animationend', () => el.remove());
+    }, durationMs);
+}
+
+// ── 放置準星 ──
+const placeCursor = document.getElementById('place-cursor');
+const cursorRing = document.getElementById('cursor-ring');
+const cursorLabel = document.getElementById('cursor-label');
+
+const CURSOR_COLORS = { wd: '#93c5fd', ns: '#67e8f9', bh: '#c084fc' };
+const CURSOR_NAMES  = { wd: '白矮星', ns: '中子星', bh: '恆星黑洞' };
+
+function updateCursorStyle() {
+    if (!cursorRing) return;
+    const col = CURSOR_COLORS[selectedExtremeType] || '#fff';
+    cursorRing.style.borderColor = col;
+    if (cursorLabel) cursorLabel.innerText = CURSOR_NAMES[selectedExtremeType] || '';
+    if (cursorLabel) cursorLabel.style.color = col;
+}
+
+window.addEventListener('mousemove', e => {
+    if (!placeCursor) return;
+    placeCursor.style.left = e.clientX + 'px';
+    placeCursor.style.top  = e.clientY + 'px';
+});
+
 let interactionMode = 'view';
 const modeViewBtn = document.getElementById('mode-view');
 const modePlaceBtn = document.getElementById('mode-place');
@@ -303,19 +427,63 @@ function setMode(mode) {
     interactionMode = mode;
     if (mode === 'view') {
         controls.enabled = true;
-        modeViewBtn.className = 'flex-1 py-1.5 px-2 bg-blue-600 rounded-lg text-sm font-bold border border-blue-400 transition-colors';
-        modePlaceBtn.className = 'flex-1 py-1.5 px-2 bg-white/10 rounded-lg text-sm font-bold border border-white/20 hover:bg-white/20 transition-colors';
-        tipText.innerText = '💡 目前為「觀察模式」：可左鍵拖曳旋轉、右鍵平移、滾輪縮放視角';
+        modeViewBtn.className = 'mode-btn flex-1 py-2 px-3 rounded-lg text-xs font-semibold border transition-all mode-btn-active';
+        modePlaceBtn.className = 'mode-btn flex-1 py-2 px-3 rounded-lg text-xs font-semibold border transition-all mode-btn-inactive';
+        tipText.innerText = '💡 觀察模式：左鍵旋轉 · 右鍵平移 · 滾輪縮放';
+        if (placeCursor) placeCursor.style.display = 'none';
+        document.body.style.cursor = '';
     } else {
         controls.enabled = false;
-        modePlaceBtn.className = 'flex-1 py-1.5 px-2 bg-blue-600 rounded-lg text-sm font-bold border border-blue-400 transition-colors';
-        modeViewBtn.className = 'flex-1 py-1.5 px-2 bg-white/10 rounded-lg text-sm font-bold border border-white/20 hover:bg-white/20 transition-colors';
-        tipText.innerText = '💡 目前為「放置模式」：點擊網格即可放置天體';
+        modePlaceBtn.className = 'mode-btn flex-1 py-2 px-3 rounded-lg text-xs font-semibold border transition-all mode-btn-active';
+        modeViewBtn.className = 'mode-btn flex-1 py-2 px-3 rounded-lg text-xs font-semibold border transition-all mode-btn-inactive';
+        tipText.innerText = '💡 放置模式：點擊畫面放置天體';
+        if (placeCursor) placeCursor.style.display = 'block';
+        document.body.style.cursor = 'none';
+        updateCursorStyle();
     }
 }
 modeViewBtn.addEventListener('click', () => setMode('view'));
 modePlaceBtn.addEventListener('click', () => setMode('place'));
 setMode('view');
+
+// ── 鍵盤快捷鍵 ──
+let simPaused = false;
+window.addEventListener('keydown', e => {
+    // 避免在 input/select 輸入時觸發
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+    switch (e.key.toLowerCase()) {
+        case 'v':
+            setMode(interactionMode === 'view' ? 'place' : 'view');
+            break;
+        case '1':
+            document.getElementById('btn-wd')?.click();
+            break;
+        case '2':
+            document.getElementById('btn-ns')?.click();
+            break;
+        case '3':
+            document.getElementById('btn-bh')?.click();
+            break;
+        case ' ':
+            e.preventDefault();
+            simPaused = !simPaused;
+            showToast(simPaused
+                ? '⏸ 模擬已暫停 <span class="kbd">Space</span> 繼續'
+                : '▶ 模擬繼續');
+            break;
+        case 'tab':
+            e.preventDefault();
+            uiContent.classList.toggle('hidden');
+            toggleUiBtn.innerText = uiContent.classList.contains('hidden') ? '🔼' : '🔽';
+            break;
+        case 'r':
+            controls.target.set(0, 0, 0);
+            camera.position.set(0, 15, 20);
+            controls.update();
+            showToast('🔄 視角已重置');
+            break;
+    }
+});
 
 let selectedExtremeType = 'wd';
 const EXTREME = {
@@ -325,14 +493,19 @@ const EXTREME = {
 };
 document.querySelectorAll('.celestial-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-        document.querySelectorAll('.celestial-btn').forEach(b => b.classList.remove('bg-white/30', 'border-white'));
-        btn.classList.add('bg-white/30', 'border-white');
+        document.querySelectorAll('.celestial-btn').forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
         selectedExtremeType = btn.dataset.type;
+        updateCursorStyle();
     });
 });
 document.getElementById('btn-wd').click();
 
 const speedSlider = document.getElementById('speed-slider');
+const speedDisplay = document.getElementById('speed-display');
+speedSlider.addEventListener('input', () => {
+    speedDisplay.innerText = `×${speedSlider.value} 步/幀`;
+});
 const grToggle = document.getElementById('gr-toggle');
 const cScaleSlider = document.getElementById('c-scale-slider');
 const cScaleDisplay = document.getElementById('c-scale-display');
@@ -342,7 +515,7 @@ const cameraTargetSelect = document.getElementById('camera-target');
 function updateCameraOptions() {
     if (!cameraTargetSelect) return;
     const currentVal = cameraTargetSelect.value;
-    cameraTargetSelect.innerHTML = '<option value="none" class="bg-gray-800">自由視角 (Free)</option>';
+    cameraTargetSelect.innerHTML = '<option value="none" class="bg-gray-900 text-gray-200">自由視角 (Free)</option>';
     // 定義分組：[groupLabel, startIdx, endIdx]（依據 initialBodiesData 的順序）
     const nPlanets = planetDefs.length;
     const nMoons = moonDefs.length;
@@ -355,13 +528,13 @@ function updateCameraOptions() {
     for (const [label, start, end] of groups) {
         const grp = document.createElement('optgroup');
         grp.label = label;
-        grp.className = 'bg-gray-800';
+        grp.className = 'bg-gray-900';
         let hasItems = false;
         for (let i = start; i < Math.min(end, mainThreadBodies.length); i++) {
             if (mainThreadBodies[i].m > 0) {
                 const opt = document.createElement('option');
                 opt.value = i;
-                opt.className = 'bg-gray-800';
+                opt.className = 'bg-gray-900 text-gray-200';
                 opt.innerText = mainThreadBodies[i].name || `Body ${i}`;
                 grp.appendChild(opt);
                 hasItems = true;
@@ -373,7 +546,7 @@ function updateCameraOptions() {
                 if (mainThreadBodies[i].m > 0) {
                     const opt = document.createElement('option');
                     opt.value = i;
-                    opt.className = 'bg-gray-800';
+                    opt.className = 'bg-gray-900 text-gray-200';
                     opt.innerText = mainThreadBodies[i].name || `Body ${i}`;
                     grp.appendChild(opt);
                     hasItems = true;
@@ -451,6 +624,7 @@ function calcSystemEnergy(positions, velocities, masses) {
         if (drift > 1) driftEl.className = 'font-mono text-red-400';
         else if (drift > 0.01) driftEl.className = 'font-mono text-yellow-400';
         else driftEl.className = 'font-mono text-green-400';
+        updateEnergyChart(drift);
     }
 }
 
@@ -543,17 +717,19 @@ async function processPendingAdds() {
         const res = await physics.addBody(body);
         if (res && res.ok === false) {
             console.warn("無法新增天體:", res.reason);
-            const desc = document.querySelector('#ui-content p');
-            if (desc) {
-                const oldHTML = desc.innerHTML;
-                desc.innerHTML = `<span class="text-red-400">無法新增天體：${res.reason}</span>`;
-                setTimeout(() => { if (desc.innerHTML.includes('無法新增天體')) desc.innerHTML = oldHTML; }, 2000);
+            const status = document.getElementById('backend-status');
+            if (status) {
+                const prev = status.innerHTML;
+                status.innerHTML = `<span class="text-red-400">無法新增：${res.reason}</span>`;
+                setTimeout(() => { status.innerHTML = prev; }, 2500);
             }
             continue;
         }
         mainThreadBodies.push({ name: visual.name, m: body.m, x: body.x, y: body.y || 0, z: body.z, vx: body.vx, vy: body.vy, vz: body.vz });
         createBodyVisual(visual);
         updateCameraOptions();
+        updateBodyCount();
+        showToast(`✨ 已放置 <b>${visual.name}</b>（${body.m.toFixed(1)} M☉）`);
         if (isBH) {
             const ring = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.05, 16, 100), new THREE.MeshBasicMaterial({ color: 0xffaa00, side: THREE.DoubleSide }));
             ring.rotation.x = Math.PI / 2;
@@ -586,6 +762,17 @@ function updateVisuals(positions, masses, velocities) {
                 if (deathPos.x < 1e11) {
                     spawnMergerVFX(deathPos);
                 }
+                // 找出吞噬者（質量最大的存活天體）
+                let absorberName = '未知天體';
+                let maxM = 0;
+                for (let k = 0; k < mainThreadBodies.length; k++) {
+                    if (k !== i && mainThreadBodies[k].m > maxM) {
+                        maxM = mainThreadBodies[k].m;
+                        absorberName = mainThreadBodies[k].name || `天體 ${k}`;
+                    }
+                }
+                const deadName = mainThreadBodies[i]?.name || `天體 ${i}`;
+                showToast(`💥 <b>${deadName}</b> 被 <b>${absorberName}</b> 吞噬<br><span class="text-gray-400">合併後質量 ${maxM.toExponential(3)} M☉</span>`, 4000);
                 meshes[i].traverse(child => {
                     if (child.geometry) child.geometry.dispose();
                     if (child.material) {
@@ -607,6 +794,7 @@ function updateVisuals(positions, masses, velocities) {
                     mainThreadBodies[i].vy = 0;
                     mainThreadBodies[i].vz = 0;
                     updateCameraOptions();
+                    updateBodyCount();
                 }
             }
             continue;
@@ -665,7 +853,7 @@ function animate() {
         if (pendingAdds.length > 0) {
             pending = true;
             processPendingAdds().then(() => { pending = false; });
-        } else {
+        } else if (!simPaused) {
             pending = true;
             const steps = parseInt(speedSlider.value);
             physics.step(steps).then(result => {
@@ -674,8 +862,9 @@ function animate() {
                     return; // 丟棄過期資料
                 }
                 updateVisuals(result.positions, result.masses, result.velocities);
+                updateSimStats(steps);
                 if (mergerHappened) {
-                    initialEnergy = null; // 合併屬非彈性碰撞，總能量會折損，必須重設基準點
+                    initialEnergy = null;
                     mergerHappened = false;
                 }
                 if (result.velocities) calcSystemEnergy(result.positions, result.velocities, result.masses);
@@ -701,8 +890,14 @@ function animate() {
 
 // ────────────────── 啟動 ──────────────────
 initPhysics().then(() => {
-    const desc = document.querySelector('#ui-content p');
-    if (desc) desc.innerHTML = `物理後端：<b class="text-green-400">${backendName}</b>｜${backendName === 'WebGPU' ? '高效能自適應步長' : '高精度 KS 正則化'}<br>單位：AU / M☉ / 年｜近似軌道模型`;
+    const dot = document.getElementById('backend-dot');
+    const status = document.getElementById('backend-status');
+    if (dot) { dot.classList.remove('gray', 'pulse'); dot.classList.add('green'); }
+    if (status) {
+        const label = backendName === 'WebGPU' ? '高效能自適應步長' : '高精度 KS 正則化';
+        status.innerHTML = `<b class="text-green-400">${backendName}</b> <span class="text-gray-500">· ${label}</span>`;
+    }
+    updateBodyCount();
     // 在開始模擬前，基於真實初始狀態計算初始總能量當作基準點
     {
         const N = physicsState.length;

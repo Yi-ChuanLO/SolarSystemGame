@@ -13,33 +13,184 @@
             background-color: #000;
             color: white;
             user-select: none;
+            font-family: 'Inter', system-ui, sans-serif;
         }
 
         #canvas-container {
             position: absolute;
-            top: 0;
-            left: 0;
-            width: 100vw;
-            height: 100vh;
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
             z-index: 1;
         }
 
         #ui-layer {
             position: absolute;
-            top: 0;
-            left: 0;
-            width: 100vw;
-            height: 100vh;
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
             z-index: 10;
             pointer-events: none;
         }
 
-        .pointer-events-auto {
-            pointer-events: auto;
+        .pointer-events-auto { pointer-events: auto; }
+
+        /* 隱藏捲軸但保留捲動功能 */
+        .scrollable { overflow-y: auto; scrollbar-width: none; }
+        .scrollable::-webkit-scrollbar { display: none; }
+
+        /* select 自訂箭頭 */
+        .custom-select {
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236b7280' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 10px center;
+            padding-right: 28px;
         }
 
-        ::-webkit-scrollbar {
+        /* 模式按鈕 active 狀態 */
+        .mode-btn-active {
+            background: rgba(37, 99, 235, 0.8);
+            border-color: rgb(96, 165, 250);
+            color: white;
+        }
+        .mode-btn-inactive {
+            background: rgba(255,255,255,0.07);
+            border-color: rgba(255,255,255,0.15);
+            color: rgb(156, 163, 175);
+        }
+        .mode-btn-inactive:hover {
+            background: rgba(255,255,255,0.13);
+            color: white;
+        }
+
+        /* 天體按鈕選中狀態 */
+        .celestial-btn { transition: all 0.15s ease; }
+        .celestial-btn.selected {
+            background: rgba(255,255,255,0.18);
+            border-color: rgba(255,255,255,0.5);
+            box-shadow: 0 0 0 1px rgba(255,255,255,0.2);
+        }
+
+        /* 放置準星 */
+        #place-cursor {
+            position: fixed;
+            pointer-events: none;
+            z-index: 20;
+            transform: translate(-50%, -50%);
             display: none;
+        }
+        #place-cursor .crosshair-ring {
+            width: 32px; height: 32px;
+            border-radius: 50%;
+            border: 1.5px solid rgba(255,255,255,0.7);
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            animation: cursor-pulse 1.5s ease-in-out infinite;
+        }
+        #place-cursor .crosshair-dot {
+            width: 4px; height: 4px;
+            border-radius: 50%;
+            background: white;
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+        }
+        #place-cursor .crosshair-label {
+            position: absolute;
+            top: calc(50% + 20px);
+            left: 50%;
+            transform: translateX(-50%);
+            white-space: nowrap;
+            font-size: 10px;
+            color: rgba(255,255,255,0.7);
+            background: rgba(0,0,0,0.5);
+            padding: 1px 6px;
+            border-radius: 4px;
+        }
+        @keyframes cursor-pulse {
+            0%, 100% { transform: translate(-50%,-50%) scale(1); opacity: 0.8; }
+            50% { transform: translate(-50%,-50%) scale(1.2); opacity: 0.4; }
+        }
+
+        /* Toast 通知 */
+        #toast-container {
+            position: fixed;
+            bottom: 5rem; right: 1.5rem;
+            z-index: 50;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            pointer-events: none;
+        }
+        .toast {
+            background: rgba(15,15,20,0.92);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 10px;
+            padding: 10px 14px;
+            font-size: 12px;
+            color: #e5e7eb;
+            max-width: 260px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            animation: toast-in 0.3s ease forwards;
+        }
+        .toast.removing {
+            animation: toast-out 0.3s ease forwards;
+        }
+        @keyframes toast-in {
+            from { opacity: 0; transform: translateX(20px); }
+            to   { opacity: 1; transform: translateX(0); }
+        }
+        @keyframes toast-out {
+            from { opacity: 1; transform: translateX(0); }
+            to   { opacity: 0; transform: translateX(20px); }
+        }
+
+        /* 鍵盤快捷鍵提示 */
+        .kbd {
+            display: inline-block;
+            padding: 0 4px;
+            background: rgba(255,255,255,0.08);
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 3px;
+            font-size: 10px;
+            font-family: monospace;
+            color: #9ca3af;
+            line-height: 1.6;
+        }
+
+        /* 提示文字淡出動畫 */
+        #tip-text {
+            transition: opacity 0.6s ease;
+        }
+        #tip-text.fade-out { opacity: 0; }
+
+        /* range slider 統一樣式 */
+        input[type=range] { cursor: pointer; }
+
+        /* 分隔線 */
+        .section-divider {
+            border: none;
+            border-top: 1px solid rgba(255,255,255,0.08);
+            margin: 8px 0;
+        }
+
+        /* 狀態指示點 */
+        .status-dot {
+            width: 7px; height: 7px;
+            border-radius: 50%;
+            display: inline-block;
+            flex-shrink: 0;
+        }
+        .status-dot.green { background: #4ade80; box-shadow: 0 0 6px #4ade80; }
+        .status-dot.red   { background: #f87171; box-shadow: 0 0 6px #f87171; }
+        .status-dot.gray  { background: #6b7280; }
+        .status-dot.pulse {
+            animation: pulse-dot 1.5s ease-in-out infinite;
+        }
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
         }
     </style>
     <script type="importmap">
@@ -53,112 +204,211 @@
 </head>
 
 <body>
-    <!-- 3D 渲染容器 -->
     <div id="canvas-container"></div>
 
-    <!-- UI 控制介面 -->
-    <div id="ui-layer" class="p-6 flex flex-col justify-between">
-        <div
-            class="pointer-events-auto bg-black/50 backdrop-blur-md border border-white/20 p-6 rounded-2xl max-w-sm shadow-2xl">
-            <div class="flex justify-between items-center mb-2">
-                <h1
-                    class="text-2xl font-bold tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-500">
-                    太陽系 N-body 模擬</h1>
-                <button id="toggle-ui-btn" class="text-xl text-gray-400 hover:text-white transition-colors"
-                    title="摺疊/展開選單">🔽</button>
+    <div id="ui-layer" class="p-4 flex flex-col items-start justify-start gap-3">
+
+        <!-- ── 主控制面板 ── -->
+        <div class="pointer-events-auto w-72 bg-black/60 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl flex flex-col"
+             style="max-height: calc(100vh - 2rem);">
+
+            <!-- 標題列 -->
+            <div class="flex items-center justify-between px-4 pt-3 pb-2.5 border-b border-white/8 flex-shrink-0">
+                <div>
+                    <h1 class="text-base font-bold tracking-wide text-white leading-tight">太陽系 N-body 模擬</h1>
+                    <div class="flex items-center gap-2 mt-0.5">
+                        <p class="text-xs text-gray-500">AU · M☉ · yr</p>
+                        <span class="text-gray-700">·</span>
+                        <p class="text-xs text-gray-500">⏱ <span id="sim-time">0.00</span> yr</p>
+                        <span class="text-gray-700">·</span>
+                        <p class="text-xs text-gray-500">🌐 <span id="body-count">—</span></p>
+                    </div>
+                </div>
+                <button id="toggle-ui-btn"
+                    class="w-7 h-7 flex items-center justify-center rounded-lg bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white transition-all text-sm"
+                    title="摺疊/展開 [Tab]">🔽</button>
             </div>
 
-            <div id="ui-content" class="transition-all duration-300">
-                <p class="text-sm text-gray-300 mb-4 border-b border-white/20 pb-4">
-                    初始化中…
-                </p>
+            <!-- 可捲動內容區 -->
+            <div id="ui-content" class="scrollable flex-1 px-4 py-2 flex flex-col gap-2">
 
-                <div class="mb-4 flex gap-2">
-                    <button id="mode-view"
-                        class="flex-1 py-1.5 px-2 bg-blue-600 rounded-lg text-sm font-bold border border-blue-400 transition-colors">👀
-                        觀察模式</button>
-                    <button id="mode-place"
-                        class="flex-1 py-1.5 px-2 bg-white/10 rounded-lg text-sm font-bold border border-white/20 hover:bg-white/20 transition-colors">➕
-                        放置模式</button>
+                <!-- 後端狀態列 -->
+                <div class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-white/4 border border-white/6">
+                    <span class="status-dot gray pulse" id="backend-dot"></span>
+                    <p id="backend-status" class="text-xs text-gray-400 leading-tight">初始化中…</p>
                 </div>
 
-                <!-- NEW: Camera Tracking -->
-                <div class="mb-4">
-                    <label class="text-sm font-semibold text-gray-400 mb-2 block" for="camera-target">鎖定視角
-                        (跟隨天體)</label>
-                    <select id="camera-target"
-                        class="w-full py-1.5 px-2 bg-white/10 rounded-lg text-sm border border-white/20 text-white focus:outline-none focus:border-blue-500 cursor-pointer appearance-none">
-                        <option value="none" class="bg-gray-800">自由視角 (Free)</option>
-                    </select>
-                </div>
-
-                <!-- NEW: Energy Monitoring -->
-                <div class="mb-4 bg-black/40 p-3 rounded-lg border border-white/10">
-                    <div class="flex justify-between text-xs text-gray-400 mb-1">
-                        <span>系統能量誤差 (ΔE/E₀)</span>
-                        <span id="energy-drift" class="font-mono text-green-400">0.000%</span>
-                    </div>
-                    <div class="flex justify-between text-xs text-gray-500">
-                        <span>動能 K</span>
-                        <span id="energy-k" class="font-mono">0.00</span>
-                    </div>
-                    <div class="flex justify-between text-xs text-gray-500">
-                        <span>位能 U</span>
-                        <span id="energy-u" class="font-mono">0.00</span>
-                    </div>
-                </div>
-
-                <div class="mb-4">
-                    <p class="text-sm font-semibold text-gray-400 mb-2">生成極端天體 (點擊畫面放置)</p>
-                    <div class="grid grid-cols-1 gap-2">
-                        <button id="btn-wd"
-                            class="celestial-btn py-2 px-4 rounded-lg bg-white/10 hover:bg-blue-500/30 border border-white/10 transition-all text-left flex justify-between items-center"
-                            data-type="wd">
-                            <span>⚪ 白矮星</span> <span class="text-xs text-blue-300">1.2 M☉</span>
+                <!-- ── 區塊 1：互動模式 ── -->
+                <div>
+                    <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">互動模式</p>
+                    <div class="flex gap-2">
+                        <button id="mode-view"
+                            class="mode-btn flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold border transition-all mode-btn-active">
+                            👀 觀察
                         </button>
-                        <button id="btn-ns"
-                            class="celestial-btn py-2 px-4 rounded-lg bg-white/10 hover:bg-cyan-500/30 border border-white/10 transition-all text-left flex justify-between items-center"
-                            data-type="ns">
-                            <span>✨ 中子星</span> <span class="text-xs text-cyan-300">2.0 M☉</span>
-                        </button>
-                        <button id="btn-bh"
-                            class="celestial-btn py-2 px-4 rounded-lg bg-white/10 hover:bg-purple-600/50 border border-white/10 transition-all text-left flex justify-between items-center shadow-[0_0_15px_rgba(168,85,247,0.5)]"
-                            data-type="bh" title="黑洞具有真實的事件視界捕獲半徑。GR 開關僅影響力學修正。">
-                            <span>🕳️ 恆星黑洞</span> <span class="text-xs text-purple-300">50.0 M☉</span>
+                        <button id="mode-place"
+                            class="mode-btn flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold border transition-all mode-btn-inactive">
+                            ➕ 放置
                         </button>
                     </div>
                 </div>
 
-                <div class="mb-4 border-t border-white/20 pt-4">
-                    <div class="flex items-center justify-between mb-2">
-                        <label class="text-sm font-semibold text-gray-400" for="gr-toggle"
-                            title="使用 Paczyński-Wiita 近似勢能。這不是完整的 1PN/EIH N-body 模型。">廣義相對論近似 (Pseudo-GR PW)</label>
-                        <input type="checkbox" id="gr-toggle" class="w-4 h-4 accent-purple-500">
+                <hr class="section-divider">
+
+                <!-- ── 區塊 2：視角追蹤 ── -->
+                <div>
+                    <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">鎖定視角</p>
+                    <div class="relative">
+                        <select id="camera-target"
+                            class="custom-select w-full py-1 px-3 bg-gray-900 rounded-lg text-xs border border-white/10 text-gray-200 focus:outline-none focus:border-blue-500/60 cursor-pointer">
+                            <option value="none" class="bg-gray-900 text-gray-200">自由視角 (Free)</option>
+                        </select>
                     </div>
+                </div>
+
+                <hr class="section-divider">
+
+                <!-- ── 區塊 3：系統能量 ── -->
+                <div>
+                    <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">系統能量</p>
+                    <div class="rounded-lg bg-black/40 border border-white/6 overflow-hidden">
+                        <div class="flex items-center justify-between px-3 py-1.5 border-b border-white/5">
+                            <span class="text-xs text-gray-400">誤差 ΔE/E₀</span>
+                            <span id="energy-drift" class="text-xs font-mono text-green-400">—</span>
+                        </div>
+                        <!-- 趨勢圖 -->
+                        <div class="px-3 pt-1.5 pb-1">
+                            <canvas id="energy-chart" width="216" height="28"
+                                style="width:100%;height:28px;display:block;opacity:0.85;"></canvas>
+                        </div>
+                        <div class="flex divide-x divide-white/5">
+                            <div class="flex-1 px-3 py-1.5">
+                                <p class="text-xs text-gray-600 mb-0.5">動能 K</p>
+                                <p id="energy-k" class="text-xs font-mono text-gray-300">—</p>
+                            </div>
+                            <div class="flex-1 px-3 py-1.5">
+                                <p class="text-xs text-gray-600 mb-0.5">位能 U</p>
+                                <p id="energy-u" class="text-xs font-mono text-gray-300">—</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <hr class="section-divider">
+
+                <!-- ── 區塊 4：放置天體 ── -->
+                <div>
+                    <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">放置天體</p>
                     <div class="flex flex-col gap-1">
-                        <div class="flex justify-between text-xs text-gray-400">
-                            <span>光速縮放 (放大 GR 效應)</span>
-                            <span id="c-scale-display">1.000x</span>
+                        <button id="btn-wd" data-type="wd"
+                            class="celestial-btn selected flex items-center justify-between px-3 py-2 rounded-lg bg-white/6 border border-white/10 text-left">
+                            <div class="flex items-center gap-2">
+                                <span class="text-sm leading-none">⚪</span>
+                                <div>
+                                    <p class="text-xs font-semibold text-white leading-tight">白矮星</p>
+                                    <p class="text-xs text-gray-500 leading-tight">White Dwarf</p>
+                                </div>
+                            </div>
+                            <span class="text-xs font-mono text-blue-300 bg-blue-500/10 px-2 py-0.5 rounded-md">1.2 M☉</span>
+                        </button>
+
+                        <button id="btn-ns" data-type="ns"
+                            class="celestial-btn flex items-center justify-between px-3 py-2 rounded-lg bg-white/6 border border-white/10 text-left">
+                            <div class="flex items-center gap-2">
+                                <span class="text-sm leading-none">✨</span>
+                                <div>
+                                    <p class="text-xs font-semibold text-white leading-tight">中子星</p>
+                                    <p class="text-xs text-gray-500 leading-tight">Neutron Star</p>
+                                </div>
+                            </div>
+                            <span class="text-xs font-mono text-cyan-300 bg-cyan-500/10 px-2 py-0.5 rounded-md">2.0 M☉</span>
+                        </button>
+
+                        <button id="btn-bh" data-type="bh"
+                            class="celestial-btn flex items-center justify-between px-3 py-2 rounded-lg bg-white/6 border border-white/10 text-left"
+                            title="黑洞具有真實的事件視界捕獲半徑。GR 開關僅影響力學修正。">
+                            <div class="flex items-center gap-2">
+                                <span class="text-sm leading-none">🕳️</span>
+                                <div>
+                                    <p class="text-xs font-semibold text-white leading-tight">恆星黑洞</p>
+                                    <p class="text-xs text-gray-500 leading-tight">Stellar Black Hole</p>
+                                </div>
+                            </div>
+                            <span class="text-xs font-mono text-purple-300 bg-purple-500/10 px-2 py-0.5 rounded-md">50 M☉</span>
+                        </button>
+                    </div>
+                </div>
+
+                <hr class="section-divider">
+
+                <!-- ── 區塊 5：物理設定 ── -->
+                <div>
+                    <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">物理設定</p>
+
+                    <!-- GR 開關 -->
+                    <div class="flex items-center justify-between mb-2">
+                        <div>
+                            <p class="text-xs font-semibold text-gray-300 leading-tight"
+                               title="使用 Paczyński-Wiita 近似勢能。這不是完整的 1PN/EIH N-body 模型。">
+                                廣義相對論近似
+                            </p>
+                            <p class="text-xs text-gray-600">Pseudo-GR (PW potential)</p>
+                        </div>
+                        <label class="relative inline-flex items-center cursor-pointer">
+                            <input type="checkbox" id="gr-toggle" class="sr-only peer">
+                            <div class="w-9 h-5 bg-white/10 peer-focus:outline-none rounded-full peer
+                                        peer-checked:after:translate-x-4 peer-checked:bg-purple-600
+                                        after:content-[''] after:absolute after:top-0.5 after:left-0.5
+                                        after:bg-white after:rounded-full after:h-4 after:w-4
+                                        after:transition-all border border-white/10"></div>
+                        </label>
+                    </div>
+
+                    <!-- 光速縮放 -->
+                    <div class="mb-2">
+                        <div class="flex justify-between items-center mb-1">
+                            <p class="text-xs text-gray-500">光速縮放 <span class="text-gray-600">(放大 GR 效應)</span></p>
+                            <span id="c-scale-display" class="text-xs font-mono text-purple-300">1.000×</span>
                         </div>
                         <input type="range" id="c-scale-slider" min="-3" max="0" step="0.1" value="0"
-                            class="w-full accent-purple-500" disabled>
+                            class="w-full h-1.5 rounded-full accent-purple-500 disabled:opacity-30" disabled>
+                    </div>
+
+                    <!-- 模擬速度 -->
+                    <div>
+                        <div class="flex justify-between items-center mb-1">
+                            <p class="text-xs text-gray-500">模擬速度</p>
+                            <span id="speed-display" class="text-xs font-mono text-blue-300">×100 步/幀</span>
+                        </div>
+                        <input type="range" id="speed-slider" min="1" max="200" value="100"
+                            class="w-full h-1.5 rounded-full accent-blue-500">
                     </div>
                 </div>
 
-                <div>
-                    <p class="text-sm font-semibold text-gray-400 mb-2">模擬速度</p>
-                    <input type="range" id="speed-slider" min="1" max="200" value="100" class="w-full accent-blue-500">
-                </div>
+                <!-- 底部留白 -->
+                <div class="h-0.5"></div>
             </div>
-        </div>
-
-        <div id="tip-text"
-            class="pointer-events-auto text-center self-center bg-black/60 px-6 py-2 rounded-full border border-white/10 animate-pulse text-sm text-blue-200">
-            💡 目前為「觀察模式」：可拖曳旋轉、右鍵平移、滾輪縮放視角
         </div>
     </div>
 
-    <!-- 主程式 -->
+    <!-- 放置準星 -->
+    <div id="place-cursor">
+        <div class="crosshair-ring" id="cursor-ring"></div>
+        <div class="crosshair-dot"></div>
+        <div class="crosshair-label" id="cursor-label">白矮星</div>
+    </div>
+
+    <!-- Toast 通知容器 -->
+    <div id="toast-container"></div>
+
+    <!-- 提示文字（底部中央） -->
+    <div style="position:absolute; bottom:1.5rem; left:0; right:0; z-index:10; pointer-events:none; display:flex; justify-content:center;">
+        <div id="tip-text"
+            class="pointer-events-auto bg-black/70 backdrop-blur-sm px-5 py-2 rounded-full border border-white/10 text-xs text-blue-200">
+            💡 觀察模式：左鍵旋轉 · 右鍵平移 · 滾輪縮放 &nbsp;<span class="kbd">V</span> 切換模式 &nbsp;<span class="kbd">1</span><span class="kbd">2</span><span class="kbd">3</span> 選天體
+        </div>
+    </div>
+
     <script type="module" src="main.js"></script>
 </body>
 
