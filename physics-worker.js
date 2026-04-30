@@ -214,6 +214,7 @@ self.onmessage = function(e) {
         enableGR = data.enableGR;
         cValue = TRUE_C * (enableGR ? data.cScale : 1.0);
         C2 = cValue * cValue;
+        computeAccelerations();
     } else if (data.type === 'add') {
         bodies.push(data.body);
         computeAccelerations();
@@ -269,13 +270,29 @@ function computeAccelerations() {
             if (dist < R_merge) {
                 if (bi.m < bj.m) { if (mergeTargets[i] < 0) mergeTargets[i] = j; }
                 else             { if (mergeTargets[j] < 0) mergeTargets[j] = i; }
-                continue; // 合併中的天體跳過力計算
+                continue;
+            }
+
+            // Always update the safe timestep before any near-field branch can skip
+            // direct-force accumulation. The KS branch used to bypass this and
+            // let very close encounters advance with BASE_DT.
+            const pairMass = bi.m + bj.m;
+            const t_dyn = ETA * Math.sqrt(dist * distSq / (G * pairMass));
+            if (t_dyn < safeDt) safeDt = t_dyn;
+            const dvx = bi.vx-bj.vx, dvy = bi.vy-bj.vy, dvz = bi.vz-bj.vz;
+            const vRelSq = dvx*dvx + dvy*dvy + dvz*dvz;
+            let t_vel = Infinity;
+            if (vRelSq > 1e-30) {
+                t_vel = ETA * dist / Math.sqrt(vRelSq);
+                if (t_vel < safeDt) safeDt = t_vel;
             }
 
             // KS 正則化區域偵測：dist 在合併半徑與 KS 閾值之間
             // 跳過直接力計算，改由 verletStep 中的 ksSubIntegrate 處理
             const R_ks = KS_FACTOR * R_merge;
             if (dist < R_ks) {
+                const ksDt = 0.1 * Math.min(t_dyn, t_vel);
+                if (ksDt < safeDt) safeDt = ksDt;
                 if (ksFlags[i] === 0 && ksFlags[j] === 0) {
                     ksActivePairs.push({ ia: i, ib: j });
                     ksFlags[i] = 1;
@@ -285,12 +302,6 @@ function computeAccelerations() {
                 // 若已有天體在其他 KS 對中，則降級為直接力計算，仰賴自適應步長
             }
 
-            // 雙準則自適應步長
-            const t_dyn = ETA * Math.sqrt(dist * distSq / (G * (bi.m + bj.m)));
-            if (t_dyn < safeDt) safeDt = t_dyn;
-            const dvx = bi.vx-bj.vx, dvy = bi.vy-bj.vy, dvz = bi.vz-bj.vz;
-            const vRelSq = dvx*dvx + dvy*dvy + dvz*dvz;
-            if (vRelSq > 1e-30) { const t_vel = ETA * dist / Math.sqrt(vRelSq); if (t_vel < safeDt) safeDt = t_vel; }
 
             const f = G / (distSq * dist);
             let axi = f*bj.m*dx, ayi = f*bj.m*dy, azi = f*bj.m*dz;
@@ -388,13 +399,17 @@ function computeAccelerations() {
         }
     }
 
-    let targetDt = Math.max(safeDt, MIN_DT);
-    // 指數衰減平滑：縮小快 (α=0.7)、放大慢 (α=0.3)
+    let targetDt = Math.max(Math.min(safeDt, BASE_DT), MIN_DT);
+    if (!Number.isFinite(targetDt)) targetDt = MIN_DT;
+    // Shrink immediately for close encounters; smooth only growth.
     const prevDt = nextSafeDt;
-    const ratio = targetDt / Math.max(prevDt, 1e-20);
-    const alpha = ratio < 1.0 ? 0.7 : 0.3;
-    nextSafeDt = Math.max(prevDt * Math.pow(ratio, alpha), MIN_DT);
-    nextSafeDt = Math.min(nextSafeDt, prevDt * 2.0); // 成長上限 2x
+    if (targetDt < prevDt) {
+        nextSafeDt = targetDt;
+    } else {
+        const ratio = targetDt / Math.max(prevDt, 1e-20);
+        nextSafeDt = Math.max(prevDt * Math.pow(ratio, 0.3), MIN_DT);
+        nextSafeDt = Math.min(nextSafeDt, prevDt * 2.0, BASE_DT);
+    }
 }
 
 function verletStep() {

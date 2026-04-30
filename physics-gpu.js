@@ -224,14 +224,16 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
         }
         workgroupBarrier();
 
-        // 步長指數衰減平滑：縮小快 (α=0.7)、放大慢 (α=0.3)，比 clamp 更平滑地保護辛結構
+        // Shrink immediately for close encounters; smooth only growth.
         if (i == 0) {
-            let targetDt = bitcast<f32>(atomicLoad(&sDtNext));
-            let ratio = targetDt / max(sDtCur, 1e-20);
-            let alpha = select(0.3, 0.7, ratio < 1.0);
-            var smoothedDt = max(sDtCur * pow(ratio, alpha), P.MIN_DT);
-            smoothedDt = min(smoothedDt, sDtCur * 2.0); // 成長上限 2x，防止交會結束後步長暴漲破壞辛結構
-            atomicStore(&sDtNext, bitcast<u32>(smoothedDt));
+            let targetDt = max(min(bitcast<f32>(atomicLoad(&sDtNext)), P.BASE_DT), P.MIN_DT);
+            var nextDt = targetDt;
+            if (targetDt >= sDtCur) {
+                let ratio = targetDt / max(sDtCur, 1e-20);
+                nextDt = max(sDtCur * pow(ratio, 0.3), P.MIN_DT);
+                nextDt = min(nextDt, min(sDtCur * 2.0, P.BASE_DT));
+            }
+            atomicStore(&sDtNext, bitcast<u32>(nextDt));
         }
         workgroupBarrier();
 
@@ -259,11 +261,17 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
 fn initAccel(@builtin(local_invocation_id) lid: vec3u) {
     let i = lid.x;
     let N = P.N;
+    if (i == 0) {
+        atomicStore(&dt.next, bitcast<u32>(P.BASE_DT));
+    }
+    storageBarrier();
+
     if (i >= N) { return; }
     
     let pi = B[i].pos; let mi = pi.w;
     var acc = vec3f(0.0);
     var ia_comp = vec3f(0.0); // Kahan 補償
+    var mdt = P.BASE_DT;
 
     if (mi == 0.0) {
         B[i].acc = vec4f(0.0);
@@ -281,9 +289,22 @@ fn initAccel(@builtin(local_invocation_id) lid: vec3u) {
         let vi = B[i].vel;
         let Rs = 2.0 * P.G * (mi + mj) / P.C2;
         let R_merge = max(vi.w + vj.w, max(3.0 * Rs, sqrt(P.EPS2)));
-        if (d < R_merge) { continue; }
+        if (d < R_merge) {
+            mdt = P.MIN_DT;
+            continue;
+        }
 
         let id3 = 1.0 / (d2 * d);
+
+        mdt = min(mdt, P.ETA * sqrt(d * d2 / (P.G * (mi + mj))));
+        let dv = vi.xyz - vj.xyz;
+        let vr2 = dot(dv, dv);
+        if (vr2 > 1e-30) { mdt = min(mdt, P.ETA * d / sqrt(vr2)); }
+
+        let R_ks = KS_FACTOR * R_merge;
+        if (d < R_ks) {
+            mdt = min(mdt, P.ETA * 0.1 * sqrt(d * d2 / (P.G * (mi + mj))));
+        }
 
         var g = P.G * id3 * mj * r;
 
@@ -298,6 +319,7 @@ fn initAccel(@builtin(local_invocation_id) lid: vec3u) {
         acc = ia_t;
     }
     B[i].acc = vec4f(acc, 0.0);
+    atomicMin(&dt.next, bitcast<u32>(max(mdt, P.MIN_DT)));
 }
 `;
 
@@ -389,15 +411,7 @@ export class WebGPUPhysics {
             ]
         });
 
-        // 初始加速度計算
-        const enc = this.device.createCommandEncoder();
-        const p = enc.beginComputePass();
-        p.setPipeline(this.pipelines.initAccel);
-        p.setBindGroup(0, this.bindGroup);
-        p.dispatchWorkgroups(1);
-        p.end();
-        this.device.queue.submit([enc.finish()]);
-        await this.device.queue.onSubmittedWorkDone();
+        await this._refreshDynamics();
     }
 
     async step(subSteps) {
@@ -464,24 +478,13 @@ export class WebGPUPhysics {
     async addBody(body) {
         if (this.N >= MAX_BODIES) return { ok: false, reason: `WebGPU 後端最多支援 ${MAX_BODIES} 個天體` };
         this.stateVersion++;
-        const o = this.N * 12;
+        await this._discardPendingReads();
         const d = new Float32Array(12);
         d[0]=body.x; d[1]=body.y; d[2]=body.z; d[3]=body.m;
         d[4]=body.vx; d[5]=body.vy; d[6]=body.vz; d[7]=body.radius || 0.0;
         this.device.queue.writeBuffer(this.bodyBuf, this.N * BODY_STRIDE, d);
         this.N++;
-        
-        this._writeParams(1);
-        
-        // 重新計算加速度
-        const enc = this.device.createCommandEncoder();
-        const p = enc.beginComputePass();
-        p.setPipeline(this.pipelines.initAccel);
-        p.setBindGroup(0, this.bindGroup);
-        p.dispatchWorkgroups(1);
-        p.end();
-        this.device.queue.submit([enc.finish()]);
-        await this.device.queue.onSubmittedWorkDone();
+        await this._refreshDynamics();
         return { ok: true };
     }
 
@@ -490,8 +493,26 @@ export class WebGPUPhysics {
         this._enableGR = enableGR;
         const c = 63239.7263 * (enableGR ? cScale : 1.0);
         this._C2 = c * c;
-        // 我們不用在這裡傳 subSteps，因為 step() 呼叫時會更新
-        this._writeParams(1); 
+        return this._refreshDynamics();
+    }
+
+    async _discardPendingReads() {
+        if (this.pendingReads.length === 0) return;
+        const reads = this.pendingReads.splice(0);
+        await Promise.allSettled(reads);
+        this.readIndex = 0;
+    }
+
+    async _refreshDynamics() {
+        this._writeParams(1);
+        const enc = this.device.createCommandEncoder();
+        const p = enc.beginComputePass();
+        p.setPipeline(this.pipelines.initAccel);
+        p.setBindGroup(0, this.bindGroup);
+        p.dispatchWorkgroups(1);
+        p.end();
+        this.device.queue.submit([enc.finish()]);
+        await this.device.queue.onSubmittedWorkDone();
     }
 
     _writeParams(subSteps = 1) {

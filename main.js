@@ -136,7 +136,16 @@ const physicsState = initialBodiesData.map(b => ({ m: b.m, x: b.x, y: b.y, z: b.
     physicsState.forEach(b => { b.vx -= cx; b.vy -= cy; b.vz -= cz; });
 }
 
-let mainThreadBodies = initialBodiesData.map(b => ({ name: b.name, m: b.m, x: b.x, y: b.y || 0, z: b.z }));
+let mainThreadBodies = initialBodiesData.map((b, i) => ({
+    name: b.name,
+    m: b.m,
+    x: b.x,
+    y: b.y || 0,
+    z: b.z,
+    vx: physicsState[i].vx,
+    vy: physicsState[i].vy,
+    vz: physicsState[i].vz
+}));
 
 // ────────────────── 2. Three.js 場景 ──────────────────
 const container = document.getElementById('canvas-container');
@@ -439,7 +448,10 @@ function updateSettings() {
     const scale = Math.pow(10, parseFloat(cScaleSlider.value));
     cScaleDisplay.innerText = scale.toFixed(3) + 'x';
     cScaleSlider.disabled = !grToggle.checked;
-    if (physics) physics.updateSettings({ enableGR: grToggle.checked, cScale: scale });
+    if (physics) {
+        Promise.resolve(physics.updateSettings({ enableGR: grToggle.checked, cScale: scale }))
+            .catch(e => console.error('Physics settings update failed:', e));
+    }
 }
 grToggle.addEventListener('change', updateSettings);
 cScaleSlider.addEventListener('input', updateSettings);
@@ -451,7 +463,7 @@ const pendingAdds = []; // 佇列：等待物理引擎空閒時再加入
 
 window.addEventListener('click', e => {
     if (interactionMode !== 'place') return;
-    if (e.target.closest('#ui-layer > div')) return;
+    if (e.target instanceof Element && e.target.closest('#ui-layer > div')) return;
     mouse.x = (e.clientX / innerWidth) * 2 - 1;
     mouse.y = -(e.clientY / innerHeight) * 2 + 1;
     raycaster.setFromCamera(mouse, camera);
@@ -459,14 +471,25 @@ window.addEventListener('click', e => {
     if (hits.length > 0) {
         const hp = hits[0].point;
         const tmpl = EXTREME[selectedExtremeType];
-        let tM = 0, cx = 0, cz = 0;
-        mainThreadBodies.forEach(b => { if (b.m > 0) { tM += b.m; cx += b.m * b.x; cz += b.m * b.z; } });
-        if (tM > 0) { cx /= tM; cz /= tM; }
+        let tM = 0, cx = 0, cz = 0, cvx = 0, cvy = 0, cvz = 0;
+        mainThreadBodies.forEach(b => {
+            if (b.m > 0) {
+                tM += b.m;
+                cx += b.m * b.x;
+                cz += b.m * b.z;
+                cvx += b.m * (b.vx || 0);
+                cvy += b.m * (b.vy || 0);
+                cvz += b.m * (b.vz || 0);
+            }
+        });
+        if (tM > 0) { cx /= tM; cz /= tM; cvx /= tM; cvy /= tM; cvz /= tM; }
         const rdx = hp.x - cx, rdz = hp.z - cz, r = Math.sqrt(rdx * rdx + rdz * rdz);
         const invR = r > 1e-12 ? 1.0 / r : 0.0;
         const vc = r > 0.05 ? Math.sqrt(G_MAIN * tM / r) : 0;
-        const vx = -vc * (rdz * invR), vz = vc * (rdx * invR);
-        const body = { m: tmpl.m, x: hp.x, y: 0, z: hp.z, vx, vy: 0, vz, ax: 0, ay: 0, az: 0, radius: tmpl.physicalRadius };
+        const vx = cvx - vc * (rdz * invR);
+        const vy = cvy;
+        const vz = cvz + vc * (rdx * invR);
+        const body = { m: tmpl.m, x: hp.x, y: 0, z: hp.z, vx, vy, vz, ax: 0, ay: 0, az: 0, radius: tmpl.physicalRadius };
         const visual = { name: tmpl.name, m: tmpl.m, x: hp.x, y: 0, z: hp.z, color: tmpl.color, radius: tmpl.radius };
         const isBH = selectedExtremeType === 'bh';
         pendingAdds.push({ body, visual, isBH });
@@ -488,7 +511,7 @@ async function processPendingAdds() {
             }
             continue;
         }
-        mainThreadBodies.push({ name: visual.name, m: body.m, x: body.x, y: body.y || 0, z: body.z });
+        mainThreadBodies.push({ name: visual.name, m: body.m, x: body.x, y: body.y || 0, z: body.z, vx: body.vx, vy: body.vy, vz: body.vz });
         createBodyVisual(visual);
         updateCameraOptions();
         if (isBH) {
@@ -509,7 +532,7 @@ window.addEventListener('resize', () => {
 // ────────────────── 6. 渲染迴圈 ──────────────────
 let mergerHappened = false;
 
-function updateVisuals(positions, masses) {
+function updateVisuals(positions, masses, velocities) {
     // 只更新 positions 陣列所涵蓋的天體數量，避免讀取超出範圍
     const posCount = Math.floor(positions.length / 3);
     const count = Math.min(meshes.length, posCount);
@@ -540,6 +563,9 @@ function updateVisuals(positions, masses) {
             if (i < mainThreadBodies.length) {
                 if (mainThreadBodies[i].m !== 0) {
                     mainThreadBodies[i].m = 0;
+                    mainThreadBodies[i].vx = 0;
+                    mainThreadBodies[i].vy = 0;
+                    mainThreadBodies[i].vz = 0;
                     updateCameraOptions();
                 }
             }
@@ -554,6 +580,11 @@ function updateVisuals(positions, masses) {
             mainThreadBodies[i].y = py;
             mainThreadBodies[i].z = pz;
             if (masses) mainThreadBodies[i].m = masses[i];
+            if (velocities) {
+                mainThreadBodies[i].vx = velocities[i * 3];
+                mainThreadBodies[i].vy = velocities[i * 3 + 1];
+                mainThreadBodies[i].vz = velocities[i * 3 + 2];
+            }
         }
         meshes[i].position.set(px, py, pz);
         // 距離自適應縮放：保證天體在遠距時仍可見，近距時顯示真實比例
@@ -603,7 +634,7 @@ function animate() {
                     return; // 丟棄過期資料
                 }
                 if (!result.pended) {
-                    updateVisuals(result.positions, result.masses);
+                    updateVisuals(result.positions, result.masses, result.velocities);
                     if (mergerHappened) {
                         initialEnergy = null; // 合併屬非彈性碰撞，總能量會折損，必須重設基準點
                         mergerHappened = false;
