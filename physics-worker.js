@@ -217,6 +217,10 @@ self.onmessage = function(e) {
         C2 = cValue * cValue;
         computeAccelerations();
     } else if (data.type === 'add') {
+        if (bodies.length >= 64) {
+            self.postMessage({ type: 'added', ok: false, reason: 'CPU Worker 後端最多支援 64 個天體' });
+            return;
+        }
         bodies.push(data.body);
         computeAccelerations();
         self.postMessage({ type: 'added', ok: true });

@@ -253,7 +253,7 @@ class WorkerPhysics {
     }
     step(n) { const v = this.stateVersion; return new Promise(r => { this._resolve = data => r({ ...data, version: v }); this.worker.postMessage({ type: 'step', steps: n }); }); }
     addBody(b) { this.stateVersion++; return new Promise(r => { this._addResolve = r; this.worker.postMessage({ type: 'add', body: b }); }); }
-    updateSettings(s) { this.stateVersion++; this.worker.postMessage({ type: 'update_settings', ...s }); }
+    updateSettings(s) { this.worker.postMessage({ type: 'update_settings', ...s }); }
 }
 
 let physics;
@@ -412,7 +412,7 @@ function computeRawEnergy(positionsArr, velocitiesArr, massesArr, useGR, cScale)
             const dx = positionsArr[j * 3] - positionsArr[i * 3];
             const dy = positionsArr[j * 3 + 1] - positionsArr[i * 3 + 1];
             const dz = positionsArr[j * 3 + 2] - positionsArr[i * 3 + 2];
-            const d = Math.sqrt(dx * dx + dy * dy + dz * dz + 1e-10);
+            const d = Math.sqrt(dx * dx + dy * dy + dz * dz + 1e-12);
 
             if (useGR) {
                 const rs = 2 * G * (mi + mj) / C2;
