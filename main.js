@@ -199,6 +199,24 @@ function createBodyVisual(d) {
 }
 initialBodiesData.forEach(createBodyVisual);
 
+// 土星 (meshes[6]) 光環視覺
+(function addSaturnRings() {
+    const saturnMesh = meshes[6];
+    if (!saturnMesh) return;
+    const ringGeo = new THREE.RingGeometry(1.6, 2.8, 128);
+    const ringMat = new THREE.MeshBasicMaterial({
+        color: 0xeecc99,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: 0.55,
+        depthWrite: false,
+    });
+    const ring = new THREE.Mesh(ringGeo, ringMat);
+    ring.rotation.x = -Math.PI / 2 + 26.73 * DEG;
+    ring.userData.isRing = true;
+    saturnMesh.add(ring);
+})();
+
 // ────────────────── 4. 物理後端 (WebGPU 優先, Worker fallback) ──────────────────
 
 // Worker fallback 封裝
@@ -280,10 +298,12 @@ const tipText = document.getElementById('tip-text');
 function setMode(mode) {
     interactionMode = mode;
     if (mode === 'view') {
+        controls.enabled = true;
         modeViewBtn.className = 'flex-1 py-1.5 px-2 bg-blue-600 rounded-lg text-sm font-bold border border-blue-400 transition-colors';
         modePlaceBtn.className = 'flex-1 py-1.5 px-2 bg-white/10 rounded-lg text-sm font-bold border border-white/20 hover:bg-white/20 transition-colors';
         tipText.innerText = '💡 目前為「觀察模式」：可左鍵拖曳旋轉、右鍵平移、滾輪縮放視角';
     } else {
+        controls.enabled = false;
         modePlaceBtn.className = 'flex-1 py-1.5 px-2 bg-blue-600 rounded-lg text-sm font-bold border border-blue-400 transition-colors';
         modeViewBtn.className = 'flex-1 py-1.5 px-2 bg-white/10 rounded-lg text-sm font-bold border border-white/20 hover:bg-white/20 transition-colors';
         tipText.innerText = '💡 目前為「放置模式」：點擊網格即可放置天體';
@@ -367,26 +387,27 @@ function updateCameraOptions() {
 updateCameraOptions();
 
 let initialEnergy = null;
-function calcSystemEnergy(positions, velocities, masses) {
-    if (!velocities) return;
+
+function computeRawEnergy(positionsArr, velocitiesArr, massesArr, useGR, cScale) {
     let K = 0, U = 0;
     const G = 4 * Math.PI * Math.PI;
-    const C2 = 63239.7263 * 63239.7263 * Math.pow(10, parseFloat(cScaleSlider.value) * 2);
-    const useGR = grToggle.checked;
+    const useScale = useGR ? Math.pow(10, cScale) : 1.0;
+    const C2 = 63239.7263 * 63239.7263 * useScale * useScale;
 
-    const count = Math.floor(positions.length / 3);
-    for (let i = 0; i < count; i++) {
-        if (masses[i] === 0) continue;
-        const mi = masses[i];
-        const v2 = velocities[i * 3] * velocities[i * 3] + velocities[i * 3 + 1] * velocities[i * 3 + 1] + velocities[i * 3 + 2] * velocities[i * 3 + 2];
-        K += 0.5 * mi * v2;
+    const posLen = positionsArr.length;
+    const N = Math.min(Math.floor(posLen / 3), massesArr.length);
+    for (let i = 0; i < N; i++) {
+        if (massesArr[i] === 0) continue;
+        const mi = massesArr[i];
+        const vxi = velocitiesArr[i * 3], vyi = velocitiesArr[i * 3 + 1], vzi = velocitiesArr[i * 3 + 2];
+        K += 0.5 * mi * (vxi * vxi + vyi * vyi + vzi * vzi);
 
-        for (let j = i + 1; j < count; j++) {
-            if (masses[j] === 0) continue;
-            const mj = masses[j];
-            const dx = positions[j * 3] - positions[i * 3];
-            const dy = positions[j * 3 + 1] - positions[i * 3 + 1];
-            const dz = positions[j * 3 + 2] - positions[i * 3 + 2];
+        for (let j = i + 1; j < N; j++) {
+            if (massesArr[j] === 0) continue;
+            const mj = massesArr[j];
+            const dx = positionsArr[j * 3] - positionsArr[i * 3];
+            const dy = positionsArr[j * 3 + 1] - positionsArr[i * 3 + 1];
+            const dz = positionsArr[j * 3 + 2] - positionsArr[i * 3 + 2];
             const d = Math.sqrt(dx * dx + dy * dy + dz * dz + 1e-10);
 
             if (useGR) {
@@ -398,14 +419,29 @@ function calcSystemEnergy(positions, velocities, masses) {
             }
         }
     }
+    return { K, U, E: K + U };
+}
 
-    const E = K + U;
-    if (initialEnergy === null && E !== 0) initialEnergy = E;
+function markInitialEnergy(positions, velocities, masses) {
+    if (!velocities) return;
+    const useGR = grToggle.checked;
+    const cScale = parseFloat(cScaleSlider.value);
+    const r = computeRawEnergy(positions, velocities, masses, useGR, cScale);
+    initialEnergy = r.E;
+}
 
-    document.getElementById('energy-k').innerText = K.toExponential(4);
-    document.getElementById('energy-u').innerText = U.toExponential(4);
+function calcSystemEnergy(positions, velocities, masses) {
+    if (!velocities) return;
+    const useGR = grToggle.checked;
+    const cScale = parseFloat(cScaleSlider.value);
+    const r = computeRawEnergy(positions, velocities, masses, useGR, cScale);
+
+    if (initialEnergy === null && r.E !== 0) initialEnergy = r.E;
+
+    document.getElementById('energy-k').innerText = r.K.toExponential(4);
+    document.getElementById('energy-u').innerText = r.U.toExponential(4);
     if (initialEnergy !== null && initialEnergy !== 0) {
-        const drift = Math.abs((E - initialEnergy) / initialEnergy) * 100;
+        const drift = Math.abs((r.E - initialEnergy) / initialEnergy) * 100;
         const driftEl = document.getElementById('energy-drift');
         driftEl.innerText = drift.toFixed(6) + '%';
         if (drift > 1) driftEl.className = 'font-mono text-red-400';
@@ -463,7 +499,7 @@ const pendingAdds = []; // 佇列：等待物理引擎空閒時再加入
 
 window.addEventListener('click', e => {
     if (interactionMode !== 'place') return;
-    if (e.target instanceof Element && e.target.closest('#ui-layer > div')) return;
+    if (e.target instanceof Element && e.target.closest('.pointer-events-auto')) return;
     mouse.x = (e.clientX / innerWidth) * 2 - 1;
     mouse.y = -(e.clientY / innerHeight) * 2 + 1;
     raycaster.setFromCamera(mouse, camera);
@@ -665,6 +701,20 @@ function animate() {
 initPhysics().then(() => {
     const desc = document.querySelector('#ui-content p');
     if (desc) desc.innerHTML = `物理後端：<b class="text-green-400">${backendName}</b>｜${backendName === 'WebGPU' ? '高效能自適應步長' : '高精度 KS 正則化'}<br>單位：AU / M☉ / 年｜近似軌道模型`;
+    // 在開始模擬前，基於真實初始狀態計算初始總能量當作基準點
+    {
+        const N = physicsState.length;
+        const pos = new Float32Array(N * 3);
+        const vel = new Float32Array(N * 3);
+        const mas = new Float32Array(N);
+        for (let i = 0; i < N; i++) {
+            const b = physicsState[i];
+            pos[i * 3] = b.x; pos[i * 3 + 1] = b.y; pos[i * 3 + 2] = b.z;
+            vel[i * 3] = b.vx; vel[i * 3 + 1] = b.vy; vel[i * 3 + 2] = b.vz;
+            mas[i] = b.m;
+        }
+        markInitialEnergy(pos, vel, mas);
+    }
     animate();
 }).catch(() => {
     // 初始化失敗已在上方函數中顯示錯誤訊息
