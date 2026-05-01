@@ -254,6 +254,8 @@ function computeAccelerations() {
     }
     
     for (let i = 0; i < N; i++) { bodies[i].ax = 0; bodies[i].ay = 0; bodies[i].az = 0; }
+    // Kahan 補償向量：消除力累加的 f32 截斷誤差，與 GPU 後端一致
+    const kax = new Float64Array(N), kay = new Float64Array(N), kaz = new Float64Array(N);
     let safeDt = BASE_DT;
     ksActivePairs = [];  // 重置 KS 對列表
     
@@ -303,6 +305,7 @@ function computeAccelerations() {
             // 跳過直接力計算，改由 verletStep 中的 ksSubIntegrate 處理
             const R_ks = KS_FACTOR * R_ks_base;
             if (dist < R_ks) {
+                // KS 區域步長縮減：10% of nominal（CPU 有完整 KS 正則化，比 GPU 的 5% 寬鬆）
                 const ksDt = 0.1 * Math.min(t_dyn, t_vel);
                 if (ksDt < safeDt) safeDt = ksDt;
                 if (ksFlags[i] === 0 && ksFlags[j] === 0) {
@@ -328,8 +331,13 @@ function computeAccelerations() {
                 axi = pw_f * bj.m * dx; ayi = pw_f * bj.m * dy; azi = pw_f * bj.m * dz;
                 axj = -pw_f * bi.m * dx; ayj = -pw_f * bi.m * dy; azj = -pw_f * bi.m * dz;
             }
-            bi.ax+=axi; bi.ay+=ayi; bi.az+=azi;
-            bj.ax+=axj; bj.ay+=ayj; bj.az+=azj;
+            // Kahan compensated summation：消除力累加截斷誤差，與 GPU 後端一致
+            { const yi = axi - kax[i]; const ti = bodies[i].ax + yi; kax[i] = (ti - bodies[i].ax) - yi; bodies[i].ax = ti; }
+            { const yi = ayi - kay[i]; const ti = bodies[i].ay + yi; kay[i] = (ti - bodies[i].ay) - yi; bodies[i].ay = ti; }
+            { const yi = azi - kaz[i]; const ti = bodies[i].az + yi; kaz[i] = (ti - bodies[i].az) - yi; bodies[i].az = ti; }
+            { const yj = axj - kax[j]; const tj = bodies[j].ax + yj; kax[j] = (tj - bodies[j].ax) - yj; bodies[j].ax = tj; }
+            { const yj = ayj - kay[j]; const tj = bodies[j].ay + yj; kay[j] = (tj - bodies[j].ay) - yj; bodies[j].ay = tj; }
+            { const yj = azj - kaz[j]; const tj = bodies[j].az + yj; kaz[j] = (tj - bodies[j].az) - yj; bodies[j].az = tj; }
         }
     }
 
@@ -439,7 +447,12 @@ function verletStep() {
         if (b.m === 0 || ksSet.has(i)) continue;
         b.vx += 0.5*b.ax*dt; b.vy += 0.5*b.ay*dt; b.vz += 0.5*b.az*dt;
         b.x += b.vx*dt; b.y += b.vy*dt; b.z += b.vz*dt;
-        if (!isFinite(b.x)||!isFinite(b.y)||!isFinite(b.z)||!isFinite(b.vx)||!isFinite(b.vy)||!isFinite(b.vz)) { b.m=0; b.x=1e12; b.y=1e12; b.z=1e12; b.vx=b.vy=b.vz=0; b.ax=b.ay=b.az=0; }
+        // 越界偵測：與 GPU 後端一致，超過 1e10 AU 視為逸出，提早清除避免大數誤差
+        if (!isFinite(b.x)||!isFinite(b.y)||!isFinite(b.z)||!isFinite(b.vx)||!isFinite(b.vy)||!isFinite(b.vz)
+            || Math.abs(b.x)>1e10 || Math.abs(b.y)>1e10 || Math.abs(b.z)>1e10
+            || Math.abs(b.vx)>1e10 || Math.abs(b.vy)>1e10 || Math.abs(b.vz)>1e10) {
+            b.m=0; b.x=1e12; b.y=1e12; b.z=1e12; b.vx=b.vy=b.vz=0; b.ax=b.ay=b.az=0;
+        }
     }
 
     // KS 對使用正則化子步積分（取代標準 Verlet）

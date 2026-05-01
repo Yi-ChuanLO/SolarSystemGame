@@ -102,7 +102,7 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
                     let both_have_radius = (vi.w > 0.0) && (vj.w > 0.0);
                     let r_min = select(0.0, R_MERGE_MIN, both_have_radius && (mi + mj) > MASS_COMPACT);
                     let R_merge = max(vi.w + vj.w, max(3.0 * Rs, r_min));
-                    let R_ks_base = select(R_MERGE_MIN, R_merge, both_have_radius);
+                    let R_ks_base = max(R_merge, R_MERGE_MIN);
                     if (d < R_merge) {
                         if (mi < mj || (mi == mj && i > j)) {
                             swallowedBy[i] = i32(j);
@@ -124,8 +124,9 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
                     if (vr2 > 1e-30) { mdt = min(mdt, P.ETA * d / sqrt(vr2)); }
 
                     // INT-1 修正：GPU 側近距交會增強
-                    // 在 KS 區域 (R_merge < d < KS_FACTOR*R_merge) 使用更激進的步長縮減，
-                    // 等效於 CPU 端 KS 正則化在近心點的密集子步效果
+                    // 在 KS 區域 (d < KS_FACTOR*R_ks_base) 使用更激進的步長縮減
+                    // 係數 0.05（5% of nominal）比 CPU Worker 的 10% 更保守，
+                    // 因為 GPU 無 KS 正則化，需要更小的步長來維持近距精度
                     let R_ks = KS_FACTOR * R_ks_base;
                     if (d < R_ks) {
                         mdt = min(mdt, P.ETA * 0.05 * sqrt(d * d2 / (P.G * (mi+mj))));
