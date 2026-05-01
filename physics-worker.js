@@ -12,8 +12,8 @@ let bodies = [];
 const BASE_DT = 0.0001;
 const MIN_DT  = 1e-8;
 const ETA     = 0.03;
-const R_MERGE_MIN = 1e-4; // 合併判斷半徑下限，僅對大質量天體（mi+mj > 0.1 M☉）生效
-const MASS_COMPACT = 0.1; // 超過此質量才套用 R_MERGE_MIN（白矮星最小 ~0.17 M☉，行星最大 ~9.5e-4 M☉）
+const R_MERGE_MIN = 1e-4; // 白矮星/中子星的數值穩定捕獲半徑下限（黑洞不套用，改由 3×Rs 主導）
+const MASS_COMPACT = 0.1; // 極端天體質量下限（最輕白矮星 1.2 M☉，最重行星 ~9.5e-4 M☉）
 let nextSafeDt = BASE_DT;
 let enableGR = false;
 let cValue = TRUE_C;
@@ -272,8 +272,13 @@ function computeAccelerations() {
 
             // 合併偵測 — 標記但不立即執行，確保力計算一致性
             const Rs = 2.0 * G * (bi.m + bj.m) / C2;
-            const r_min = (bi.m + bj.m) > MASS_COMPACT ? R_MERGE_MIN : 0.0;
+            // 只有兩個天體都有物理半徑（非黑洞）且合計質量 > MASS_COMPACT 時，
+            // 才套用 R_MERGE_MIN；只要其中一個是黑洞（radius=0），改由 3×Rs 主導
+            const both_have_radius = (bi.radius || 0) > 0 && (bj.radius || 0) > 0;
+            const r_min = (both_have_radius && (bi.m + bj.m) > MASS_COMPACT) ? R_MERGE_MIN : 0.0;
             const R_merge = Math.max((bi.radius || 0) + (bj.radius || 0), Math.max(3.0 * Rs, r_min));
+            // KS 啟動半徑：所有配對至少為 R_MERGE_MIN，確保足夠的近距保護範圍
+            const R_ks_base = Math.max(R_merge, R_MERGE_MIN);
             if (dist < R_merge) {
                 if (bi.m < bj.m) { if (mergeTargets[i] < 0) mergeTargets[i] = j; }
                 else             { if (mergeTargets[j] < 0) mergeTargets[j] = i; }
@@ -296,7 +301,7 @@ function computeAccelerations() {
 
             // KS 正則化區域偵測：dist 在合併半徑與 KS 閾值之間
             // 跳過直接力計算，改由 verletStep 中的 ksSubIntegrate 處理
-            const R_ks = KS_FACTOR * R_merge;
+            const R_ks = KS_FACTOR * R_ks_base;
             if (dist < R_ks) {
                 const ksDt = 0.1 * Math.min(t_dyn, t_vel);
                 if (ksDt < safeDt) safeDt = ksDt;

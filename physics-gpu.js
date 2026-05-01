@@ -10,9 +10,12 @@ const PARAMS_SIZE = 48; // 12 × f32/u32 (包含 subSteps 與 padding)
 // ────────────────────────── WGSL 著色器 ──────────────────────────
 const WGSL = /* wgsl */`
 const WG: u32 = 64u;
-const KS_FACTOR: f32 = 4.0;   // 合併半徑的 4 倍以內才啟用密集積分（原為 20，基準改為 R_MERGE_MIN 後需同步縮小）
-const R_MERGE_MIN: f32 = 1e-4; // 合併判斷半徑下限 (AU)，僅對大質量天體（mi+mj > 0.1 M☉）生效
-const MASS_COMPACT: f32 = 0.1; // 超過此質量才套用 R_MERGE_MIN（白矮星最小 ~0.17 M☉，行星最大 ~9.5e-4 M☉）
+const KS_FACTOR: f32 = 4.0;   // 合併半徑的 4 倍以內才啟用密集積分
+// R_MERGE_MIN：白矮星/中子星的數值穩定捕獲半徑下限
+// 僅在兩天體都有物理半徑（非黑洞）且合計質量 > MASS_COMPACT 時套用
+// 黑洞（physicalRadius=0）改用 3×Rs（Schwarzschild 半徑），由 GR 主導捕獲
+const R_MERGE_MIN: f32 = 1e-4;
+const MASS_COMPACT: f32 = 0.1; // 極端天體質量下限（最輕白矮星 1.2 M☉，最重行星 ~9.5e-4 M☉）
 
 struct Body { pos: vec4f, vel: vec4f, acc: vec4f };
 struct Params { 
@@ -93,8 +96,13 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
                     let d = sqrt(d2);
 
                     let Rs = 2.0 * P.G * (mi + mj) / P.C2;
-                    let r_min = select(0.0, R_MERGE_MIN, (mi + mj) > MASS_COMPACT);
+                    // 只有兩個天體都有物理半徑（非黑洞）且合計質量 > MASS_COMPACT 時，
+                    // 才套用 R_MERGE_MIN（白矮星/中子星的數值穩定下限）
+                    // 只要其中一個是黑洞（radius=0），改由 3×Rs 主導捕獲半徑
+                    let both_have_radius = (vi.w > 0.0) && (vj.w > 0.0);
+                    let r_min = select(0.0, R_MERGE_MIN, both_have_radius && (mi + mj) > MASS_COMPACT);
                     let R_merge = max(vi.w + vj.w, max(3.0 * Rs, r_min));
+                    let R_ks_base = select(R_MERGE_MIN, R_merge, both_have_radius);
                     if (d < R_merge) {
                         if (mi < mj || (mi == mj && i > j)) {
                             swallowedBy[i] = i32(j);
@@ -118,7 +126,7 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
                     // INT-1 修正：GPU 側近距交會增強
                     // 在 KS 區域 (R_merge < d < KS_FACTOR*R_merge) 使用更激進的步長縮減，
                     // 等效於 CPU 端 KS 正則化在近心點的密集子步效果
-                    let R_ks = KS_FACTOR * R_merge;
+                    let R_ks = KS_FACTOR * R_ks_base;
                     if (d < R_ks) {
                         mdt = min(mdt, P.ETA * 0.05 * sqrt(d * d2 / (P.G * (mi+mj))));
                     }
@@ -307,8 +315,10 @@ fn initAccel(@builtin(local_invocation_id) lid: vec3u) {
 
         let vi = B[i].vel;
         let Rs = 2.0 * P.G * (mi + mj) / P.C2;
-        let r_min = select(0.0, R_MERGE_MIN, (mi + mj) > MASS_COMPACT);
+        let both_have_radius = (vi.w > 0.0) && (vj.w > 0.0);
+        let r_min = select(0.0, R_MERGE_MIN, both_have_radius && (mi + mj) > MASS_COMPACT);
         let R_merge = max(vi.w + vj.w, max(3.0 * Rs, r_min));
+        let R_ks_base = max(R_merge, R_MERGE_MIN);
         if (d < R_merge) {
             mdt = P.MIN_DT;
             continue;
@@ -321,7 +331,7 @@ fn initAccel(@builtin(local_invocation_id) lid: vec3u) {
         let vr2 = dot(dv, dv);
         if (vr2 > 1e-30) { mdt = min(mdt, P.ETA * d / sqrt(vr2)); }
 
-        let R_ks = KS_FACTOR * R_merge;
+        let R_ks = KS_FACTOR * R_ks_base;
         if (d < R_ks) {
             mdt = min(mdt, P.ETA * 0.05 * sqrt(d * d2 / (P.G * (mi + mj))));
         }
