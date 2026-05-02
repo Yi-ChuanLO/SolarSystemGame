@@ -263,8 +263,7 @@
     <div id="ui-layer" class="md:p-4 max-md:p-0 flex flex-col items-start justify-start gap-3">
 
         <!-- ── 主控制面板 ── -->
-        <div class="pointer-events-auto max-md:w-full md:w-72 bg-black/60 backdrop-blur-xl border border-white/10 rounded-2xl max-md:rounded-b-none max-md:border-b-0 shadow-2xl flex flex-col max-md:fixed max-md:bottom-0 max-md:left-0 md:max-h-[calc(100vh-2rem)] max-md:max-h-[45vh]"
-             style="z-index: 20;">
+        <div class="pointer-events-auto max-md:w-full md:w-72 bg-black/60 backdrop-blur-xl border border-white/10 rounded-2xl max-md:rounded-b-none max-md:border-b-0 shadow-2xl flex flex-col max-md:fixed max-md:bottom-0 max-md:left-0 md:max-h-[calc(100vh-2rem)] max-md:max-h-[45vh] z-20">
 
             <!-- 標題列 -->
             <div class="flex items-center justify-between px-4 pt-3 pb-2.5 border-b border-white/8 flex-shrink-0">
@@ -330,10 +329,9 @@
                             <span class="text-xs text-gray-400">誤差 ΔE/E₀</span>
                             <span id="energy-drift" class="text-xs font-mono text-green-400">—</span>
                         </div>
-                        <!-- 趨勢圖 -->
                         <div class="px-3 pt-1.5 pb-1">
                             <canvas id="energy-chart" width="216" height="28"
-                                style="width:100%;height:28px;display:block;opacity:0.85;"></canvas>
+                                class="w-full h-[28px] block opacity-85"></canvas>
                         </div>
                         <div class="flex divide-x divide-white/5">
                             <div class="flex-1 px-3 py-1.5">
@@ -453,19 +451,18 @@
             <span id="card-name" class="text-sm font-bold text-white"></span>
         </div>
         <div class="flex flex-col gap-1">
-            <div style="display:flex;justify-content:space-between;gap:12px;"><span style="font-size:11px;color:#6b7280;">質量</span><span id="card-val-mass" style="font-size:11px;font-family:monospace;color:#d1d5db;"></span></div>
-            <div style="display:flex;justify-content:space-between;gap:12px;"><span style="font-size:11px;color:#6b7280;">速度</span><span id="card-val-speed" style="font-size:11px;font-family:monospace;color:#d1d5db;"></span></div>
-            <div style="display:flex;justify-content:space-between;gap:12px;"><span style="font-size:11px;color:#6b7280;">距原點</span><span id="card-val-dist" style="font-size:11px;font-family:monospace;color:#d1d5db;"></span></div>
-            <div style="display:flex;justify-content:space-between;gap:12px;"><span style="font-size:11px;color:#6b7280;">位置 X</span><span id="card-val-x" style="font-size:11px;font-family:monospace;color:#d1d5db;"></span></div>
-            <div style="display:flex;justify-content:space-between;gap:12px;"><span style="font-size:11px;color:#6b7280;">位置 Z</span><span id="card-val-z" style="font-size:11px;font-family:monospace;color:#d1d5db;"></span></div>
+            <div class="flex justify-between gap-3"><span class="text-[11px] text-gray-500">質量</span><span id="card-val-mass" class="text-[11px] font-mono text-gray-300"></span></div>
+            <div class="flex justify-between gap-3"><span class="text-[11px] text-gray-500">速度</span><span id="card-val-speed" class="text-[11px] font-mono text-gray-300"></span></div>
+            <div class="flex justify-between gap-3"><span class="text-[11px] text-gray-500">距原點</span><span id="card-val-dist" class="text-[11px] font-mono text-gray-300"></span></div>
+            <div class="flex justify-between gap-3"><span class="text-[11px] text-gray-500">位置 X</span><span id="card-val-x" class="text-[11px] font-mono text-gray-300"></span></div>
+            <div class="flex justify-between gap-3"><span class="text-[11px] text-gray-500">位置 Z</span><span id="card-val-z" class="text-[11px] font-mono text-gray-300"></span></div>
         </div>
     </div>
 
-    <!-- 暫停指示器 -->
-    <div id="pause-indicator" style="display:none; align-items:center; gap:6px;">
+    <div id="pause-indicator">
         <span>⏸</span>
         <span>已暫停</span>
-        <span style="color:#6b7280;font-size:10px;"><span class="kbd">Space</span> 繼續</span>
+        <span class="text-gray-500 text-[10px]"><span class="kbd">Space</span> 繼續</span>
     </div>
     <div id="place-cursor">
         <div class="crosshair-ring" id="cursor-ring"></div>
@@ -477,7 +474,7 @@
     <div id="toast-container"></div>
 
     <!-- 提示文字（底部中央） -->
-    <div class="max-md:hidden" style="position:absolute; bottom:1.5rem; left:0; right:0; z-index:10; pointer-events:none; display:flex; justify-content:center;">
+    <div class="max-md:hidden absolute bottom-6 left-0 right-0 z-10 pointer-events-none flex justify-center">
         <div id="tip-text"
             class="pointer-events-auto bg-black/70 backdrop-blur-sm px-5 py-2 rounded-full border border-white/10 text-xs text-blue-200">
             💡 觀察模式：左鍵旋轉 · 右鍵平移 · 滾輪縮放 &nbsp;<span class="kbd">V</span> 切換模式 &nbsp;<span class="kbd">1</span><span class="kbd">2</span><span class="kbd">3</span> 選天體
