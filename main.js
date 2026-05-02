@@ -275,10 +275,30 @@ async function initPhysics() {
 // ────────────────── 5. UI 互動 ──────────────────
 const uiContent = document.getElementById('ui-content');
 const toggleUiBtn = document.getElementById('toggle-ui-btn');
-toggleUiBtn.addEventListener('click', () => {
+
+function updateCameraOffset() {
+    if (window.innerWidth < 768 && uiContent && !uiContent.classList.contains('hidden')) {
+        const offsetY = window.innerHeight * 0.225;
+        camera.setViewOffset(window.innerWidth, window.innerHeight, 0, offsetY, window.innerWidth, window.innerHeight);
+    } else {
+        camera.clearViewOffset();
+    }
+}
+
+function toggleUi() {
+    if (!uiContent || !toggleUiBtn) return;
     uiContent.classList.toggle('hidden');
     toggleUiBtn.innerText = uiContent.classList.contains('hidden') ? '🔼' : '🔽';
-});
+    updateCameraOffset();
+}
+
+if (toggleUiBtn) {
+    // Remove old listener if any, then add the proper one
+    toggleUiBtn.addEventListener('click', toggleUi);
+}
+if (window.innerWidth < 768 && uiContent && !uiContent.classList.contains('hidden')) {
+    toggleUi(); // Collapse by default on mobile
+}
 
 // ── 模擬時間計數器 ──
 let simTimeYears = 0;
@@ -540,8 +560,7 @@ window.addEventListener('keydown', e => {
             break;
         case 'tab':
             e.preventDefault();
-            uiContent.classList.toggle('hidden');
-            toggleUiBtn.innerText = uiContent.classList.contains('hidden') ? '🔼' : '🔽';
+            if (typeof toggleUi === 'function') toggleUi();
             break;
         case 'r':
             controls.target.set(0, 0, 0);
@@ -551,6 +570,8 @@ window.addEventListener('keydown', e => {
             break;
     }
 });
+
+
 
 let selectedExtremeType = 'wd';
 const EXTREME = {
@@ -810,6 +831,7 @@ window.addEventListener('resize', () => {
     camera.aspect = innerWidth / innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(innerWidth, innerHeight);
+    if (typeof updateCameraOffset === 'function') updateCameraOffset();
 });
 
 // ────────────────── 6. 渲染迴圈 ──────────────────
