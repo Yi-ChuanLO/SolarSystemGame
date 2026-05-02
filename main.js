@@ -10,87 +10,83 @@ const G_MAIN = 4 * Math.PI * Math.PI;
 const DEG = Math.PI / 180;
 
 // ── 軌道力學工具函式 ──
-// 圓軌道 → 直角座標 (x-z = 黃道面, y = 北黃極)
-function circOrbit(a, i_deg, Omega_deg, nu_deg, M_central) {
-    const i = i_deg * DEG, O = Omega_deg * DEG, nu = nu_deg * DEG;
-    const v = TWO_PI * Math.sqrt(M_central / a);
+function keplerOrbit(a, e, i_deg, Omega_deg, w_deg, nu_deg, M_central) {
+    if (a === 0) return { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 };
+    const i = i_deg * DEG, O = Omega_deg * DEG, w = w_deg * DEG, nu = nu_deg * DEG;
+    const p = a * (1 - e * e);
+    const r = p / (1 + e * Math.cos(nu));
+    const h = TWO_PI * Math.sqrt(M_central * p); // h = sqrt(mu*p)
+    
+    const x_orb = r * Math.cos(nu);
+    const y_orb = r * Math.sin(nu);
+    const vx_orb = -(TWO_PI * TWO_PI * M_central / h) * Math.sin(nu);
+    const vy_orb = (TWO_PI * TWO_PI * M_central / h) * (e + Math.cos(nu));
+    
+    const cw = Math.cos(w), sw = Math.sin(w);
+    const x_peri = x_orb * cw - y_orb * sw;
+    const y_peri = x_orb * sw + y_orb * cw;
+    const vx_peri = vx_orb * cw - vy_orb * sw;
+    const vy_peri = vx_orb * sw + vy_orb * cw;
+    
     const cO = Math.cos(O), sO = Math.sin(O);
     const ci = Math.cos(i), si = Math.sin(i);
-    const cn = Math.cos(nu), sn = Math.sin(nu);
+    
     return {
-        x: (cO * cn - sO * ci * sn) * a,
-        y: (si * sn) * a,
-        z: (sO * cn + cO * ci * sn) * a,
-        vx: (-cO * sn - sO * ci * cn) * v,
-        vy: (si * cn) * v,
-        vz: (-sO * sn + cO * ci * cn) * v,
+        x: (cO * x_peri - sO * ci * y_peri),
+        y: (si * y_peri),
+        z: (sO * x_peri + cO * ci * y_peri),
+        vx: (cO * vx_peri - sO * ci * vy_peri),
+        vy: (si * vy_peri),
+        vz: (sO * vx_peri + cO * ci * vy_peri)
     };
 }
-// 偏心軌道近日點 → 直角座標
-function periOrbit(a, e, i_deg, Omega_deg, M_central) {
-    const rp = a * (1 - e);
-    const vp = TWO_PI * Math.sqrt(M_central * (1 + e) / (a * (1 - e)));
-    const i = i_deg * DEG, O = Omega_deg * DEG;
-    const cO = Math.cos(O), sO = Math.sin(O);
-    const ci = Math.cos(i), si = Math.sin(i);
-    return { x: cO * rp, y: 0, z: sO * rp, vx: -sO * ci * vp, vy: si * vp, vz: cO * ci * vp };
-}
+
 // 衛星座標 = 母體座標 + 相對軌道座標
-function moonState(parent, a_moon, i_deg, Omega_deg, nu_deg, M_parent) {
-    const rel = circOrbit(a_moon, i_deg, Omega_deg, nu_deg, M_parent);
+function moonState(parent, a_moon, e_moon, i_deg, Omega_deg, w_deg, nu_deg, M_parent) {
+    const rel = keplerOrbit(a_moon, e_moon, i_deg, Omega_deg, w_deg, nu_deg, M_parent);
     return {
         x: parent.x + rel.x, y: parent.y + rel.y, z: parent.z + rel.z,
         vx: parent.vx + rel.vx, vy: parent.vy + rel.vy, vz: parent.vz + rel.vz,
     };
 }
 
-// ── 行星資料 (含真實軌道傾角) ──
+// ── 行星資料 (含真實軌道傾角與離心率) ──
 const M_SUN = 1.0;
 const planetDefs = [
-    // name, mass, a, i(°), Ω(°), ν(°), color, radius, physicalRadius(AU)
-    // 視覺半徑刻意縮小，確保衛星軌道在母體球體之外；遠距可見性由 updateVisuals 的動態縮放保障
-    ['太陽', 1.0, 0, 0, 0, 0, 0xffdd00, 0.015, 0.00465],
-    ['水星', 1.65e-7, 0.387, 7.005, 48.33, 0, 0xaaaaaa, 0.001, 1.63e-5],
-    ['金星', 2.45e-6, 0.723, 3.395, 76.68, 60, 0xffcc88, 0.0015, 4.05e-5],
-    ['地球', 3.00e-6, 1.000, 0.000, 0.00, 0, 0x4488ff, 0.0015, 4.26e-5],
-    ['火星', 3.20e-7, 1.524, 1.850, 49.56, 120, 0xff5533, 0.001, 2.27e-5],
-    ['木星', 9.50e-4, 5.200, 1.303, 100.46, 80, 0xddaa77, 0.003, 4.78e-4],
-    ['土星', 2.80e-4, 9.580, 2.485, 113.67, 200, 0xeecc99, 0.0025, 4.03e-4],
-    ['天王星', 4.37e-5, 19.200, 0.773, 74.01, 280, 0x66ccff, 0.002, 1.70e-4],
-    ['海王星', 5.00e-5, 30.050, 1.770, 131.78, 330, 0x3366ff, 0.002, 1.65e-4],
+    // name, mass, a, e, i(°), Ω(°), w(°), ν(°), color, radius, physicalRadius(AU)
+    ['太陽', 1.0, 0, 0, 0, 0, 0, 0, 0xffdd00, 0.015, 0.00465],
+    ['水星', 1.65e-7, 0.387, 0.2056, 7.005, 48.33, 29.124, 0, 0xaaaaaa, 0.001, 1.63e-5],
+    ['金星', 2.45e-6, 0.723, 0.0068, 3.395, 76.68, 54.884, 60, 0xffcc88, 0.0015, 4.05e-5],
+    ['地球', 3.00e-6, 1.000, 0.0167, 0.000, 0.00, 288.064, 180, 0x4488ff, 0.0015, 4.26e-5],
+    ['火星', 3.20e-7, 1.524, 0.0934, 1.850, 49.56, 286.502, 120, 0xff5533, 0.001, 2.27e-5],
+    ['木星', 9.50e-4, 5.200, 0.0484, 1.303, 100.46, 273.867, 80, 0xddaa77, 0.003, 4.78e-4],
+    ['土星', 2.80e-4, 9.580, 0.0541, 2.485, 113.67, 339.392, 200, 0xeecc99, 0.0025, 4.03e-4],
+    ['天王星', 4.37e-5, 19.200, 0.0472, 0.773, 74.01, 96.998, 280, 0x66ccff, 0.002, 1.70e-4],
+    ['海王星', 5.00e-5, 30.050, 0.0086, 1.770, 131.78, 273.187, 330, 0x3366ff, 0.002, 1.65e-4],
 ];
 
 // ── 衛星資料 ──
-// [name, parentIdx, a(AU), mass(M☉), i(°), Ω(°), ν(°), color, radius, physicalRadius]
-// 傾角 i 為相對黃道面；天王星衛星因天王星軸傾 97.77° 故 i≈97.8°
-// 土星衛星傾角為相對黃道面（土星赤道傾角 26.73°，衛星相對赤道傾角極小，
-//   故相對黃道面傾角 ≈ 26.73° + 衛星自身傾角，此處取近似值）
 const moonDefs = [
-    // 地球系
-    ['月球', 3, 2.570e-3, 3.69e-8, 5.145, 125.0, 0, 0xcccccc, 0.0008, 1.16e-5],
-    // 木星系 (排除 Io 以維持效能)
-    ['歐羅巴',   5, 4.485e-3, 2.41e-8, 1.79, 0,   0,   0xccddff, 0.0008, 1.05e-5],
-    ['蓋尼米德', 5, 7.155e-3, 7.45e-8, 2.21, 0,   120, 0xbbaa88, 0.001,  1.76e-5],
-    ['卡利斯托', 5, 1.259e-2, 5.41e-8, 2.02, 0,   240, 0x887766, 0.0008, 1.61e-5],
-    // 土星系 (傾角相對黃道面：土星軸傾 26.73° + 衛星相對赤道傾角)
-    // Titan 相對赤道傾角 0.33° → 相對黃道 ≈ 27.06°；Rhea ≈ 26.73°
-    ['泰坦',   6, 8.168e-3, 6.76e-8, 27.1, 0,   0,   0xff8833, 0.001,  1.72e-5],
-    ['瑞亞',   6, 3.522e-3, 1.16e-9, 26.7, 0,   180, 0xddddcc, 0.0006, 5.10e-6],
-    // 天王星系 (軌道近垂直黃道面, i≈97.77°；升交點錯開 90° 避免軌道面完全重疊)
-    ['提坦尼亞', 7, 2.917e-3, 1.76e-9, 97.8, 0,   0,   0xaabbcc, 0.0006, 5.27e-6],
-    ['奧伯龍',   7, 3.900e-3, 1.46e-9, 97.8, 90,  180, 0x998877, 0.0006, 5.09e-6],
-    // 海王星系 (逆行軌道, i≈157°)
-    ['崔頓', 8, 2.371e-3, 1.08e-8, 157.0, 0, 0, 0xaaddff, 0.0008, 9.04e-6],
+    // [name, parentIdx, a(AU), e, mass(M☉), i(°), Ω(°), w(°), ν(°), color, radius, physicalRadius]
+    ['月球', 3, 2.570e-3, 0.0549, 3.69e-8, 5.145, 125.0, 0, 0, 0xcccccc, 0.0008, 1.16e-5],
+    ['歐羅巴',   5, 4.485e-3, 0.0094, 2.41e-8, 1.79, 0, 0, 0,   0xccddff, 0.0008, 1.05e-5],
+    ['蓋尼米德', 5, 7.155e-3, 0.0013, 7.45e-8, 2.21, 0, 0, 120, 0xbbaa88, 0.001,  1.76e-5],
+    ['卡利斯托', 5, 1.259e-2, 0.0074, 5.41e-8, 2.02, 0, 0, 240, 0x887766, 0.0008, 1.61e-5],
+    ['泰坦',   6, 8.168e-3, 0.0288, 6.76e-8, 27.1, 0, 0, 0,   0xff8833, 0.001,  1.72e-5],
+    ['瑞亞',   6, 3.522e-3, 0.001, 1.16e-9, 26.7, 0, 0, 180, 0xddddcc, 0.0006, 5.10e-6],
+    ['提坦尼亞', 7, 2.917e-3, 0.0011, 1.76e-9, 97.8, 0, 0, 0,   0xaabbcc, 0.0006, 5.27e-6],
+    ['奧伯龍',   7, 3.900e-3, 0.0014, 1.46e-9, 97.8, 90, 0, 180, 0x998877, 0.0006, 5.09e-6],
+    ['崔頓', 8, 2.371e-3, 0.00001, 1.08e-8, 157.0, 0, 0, 0, 0xaaddff, 0.0008, 9.04e-6],
 ];
 
 // ── 矮行星資料 ──
-// [name, a(AU), e, mass(M☉), i(°), Ω(°), color, radius, physicalRadius]
 const dwarfDefs = [
-    ['冥王星',   39.48, 0.250, 6.58e-9, 17.16, 110.30, 0xddbb88, 0.001,  7.94e-6],
-    ['穀神星',    2.77, 0.076, 4.72e-10, 10.59,  80.33, 0x999999, 0.0008, 3.14e-6],
-    ['鬩神星',   67.67, 0.440, 8.35e-9, 44.04,  35.87, 0xeeeeee, 0.001,  7.77e-6],
-    ['妊神星',   43.22, 0.195, 2.01e-9, 28.21, 121.90, 0xddccbb, 0.0008, 5.43e-6],
-    ['鳥神星',   45.51, 0.161, 1.56e-9, 29.01,  79.42, 0xcc8866, 0.0008, 4.81e-6],
+    // [name, a(AU), e, mass(M☉), i(°), Ω(°), w(°), color, radius, physicalRadius]
+    ['冥王星',   39.48, 0.250, 6.58e-9, 17.16, 110.30, 113.8, 0xddbb88, 0.001,  7.94e-6],
+    ['穀神星',    2.77, 0.076, 4.72e-10, 10.59,  80.33, 73.6, 0x999999, 0.0008, 3.14e-6],
+    ['鬩神星',   67.67, 0.440, 8.35e-9, 44.04,  35.87, 151.4, 0xeeeeee, 0.001,  7.77e-6],
+    ['妊神星',   43.22, 0.195, 2.01e-9, 28.21, 121.90, 239.2, 0xddccbb, 0.0008, 5.43e-6],
+    ['鳥神星',   45.51, 0.161, 1.56e-9, 29.01,  79.42, 253.0, 0xcc8866, 0.0008, 4.81e-6],
 ];
 
 // ── 組裝初始資料 ──
@@ -98,27 +94,22 @@ const initialBodiesData = [];
 
 // 1) 行星
 const planetStates = []; // 暫存行星狀態供衛星參考
-for (const [name, m, a, i, O, nu, color, radius, physicalRadius] of planetDefs) {
-    let state;
-    if (a === 0) { // 太陽
-        state = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 };
-    } else {
-        state = circOrbit(a, i, O, nu, M_SUN);
-    }
+for (const [name, m, a, e, i, O, w, nu, color, radius, physicalRadius] of planetDefs) {
+    let state = keplerOrbit(a, e, i, O, w, nu, M_SUN);
     planetStates.push({ ...state, m });
     initialBodiesData.push({ name, m, ...state, color, radius, physicalRadius });
 }
 
 // 2) 衛星
-for (const [name, pi, a, m, i, O, nu, color, radius, physicalRadius] of moonDefs) {
+for (const [name, pi, a, e, m, i, O, w, nu, color, radius, physicalRadius] of moonDefs) {
     const parent = planetStates[pi];
-    const state = moonState(parent, a, i, O, nu, parent.m);
+    const state = moonState(parent, a, e, i, O, w, nu, parent.m);
     initialBodiesData.push({ name, m, ...state, color, radius, physicalRadius });
 }
 
 // 3) 矮行星
-for (const [name, a, e, m, i, O, color, radius, physicalRadius] of dwarfDefs) {
-    const state = periOrbit(a, e, i, O, M_SUN);
+for (const [name, a, e, m, i, O, w, color, radius, physicalRadius] of dwarfDefs) {
+    const state = keplerOrbit(a, e, i, O, w, 0, M_SUN);
     initialBodiesData.push({ name, m, ...state, color, radius, physicalRadius });
 }
 // 注：凱倫（冥王星衛星）因希爾球在 N-body 全域積分下不穩定，已移除
@@ -234,7 +225,8 @@ class WorkerPhysics {
                 this._resolve({
                     positions: new Float32Array(e.data.positions),
                     velocities: e.data.velocities ? new Float32Array(e.data.velocities) : null,
-                    masses: e.data.masses ? new Float32Array(e.data.masses) : null
+                    masses: e.data.masses ? new Float32Array(e.data.masses) : null,
+                    totalDt: e.data.totalDt
                 });
                 this._resolve = null;
             } else if (e.data.type === 'added' && this._addResolve) {
@@ -293,14 +285,13 @@ let simTimeYears = 0;
 const simTimeEl = document.getElementById('sim-time');
 const bodyCountEl = document.getElementById('body-count');
 
-function updateSimStats(steps) {
-    // 用 BASE_DT 作為每步的近似時間上限（實際 dt 由物理引擎自適應，此為估算值）
-    simTimeYears += steps * 0.0001;
+function updateSimStats(actualDt) {
+    simTimeYears += actualDt;
     if (simTimeEl) {
         const label = simTimeYears < 1000
             ? simTimeYears.toFixed(2) + ' yr'
             : (simTimeYears / 1000).toFixed(2) + 'k yr';
-        simTimeEl.innerText = label;
+        simTimeEl.textContent = label;
     }
 }
 
@@ -396,11 +387,14 @@ const cardColorDot = document.getElementById('card-color-dot');
 const cardRows = document.getElementById('card-rows');
 let inspectedMeshIdx = -1;
 
-function makeCardRow(label, value) {
-    return `<div style="display:flex;justify-content:space-between;gap:12px;">
-        <span style="font-size:11px;color:#6b7280;">${label}</span>
-        <span style="font-size:11px;font-family:monospace;color:#d1d5db;">${value}</span>
-    </div>`;
+function updateBodyInfoDOM(b) {
+    const speed = Math.sqrt((b.vx||0)**2 + (b.vy||0)**2 + (b.vz||0)**2);
+    const distSun = Math.sqrt(b.x**2 + b.y**2 + b.z**2);
+    document.getElementById('card-val-mass').textContent = `${b.m.toExponential(3)} M☉`;
+    document.getElementById('card-val-speed').textContent = `${speed.toFixed(4)} AU/yr`;
+    document.getElementById('card-val-dist').textContent = `${distSun.toFixed(4)} AU`;
+    document.getElementById('card-val-x').textContent = `${b.x.toFixed(4)} AU`;
+    document.getElementById('card-val-z').textContent = `${b.z.toFixed(4)} AU`;
 }
 
 function showBodyInfo(meshIdx, screenX, screenY) {
@@ -413,17 +407,9 @@ function showBodyInfo(meshIdx, screenX, screenY) {
 
     cardColorDot.style.background = hexColor;
     cardColorDot.style.boxShadow = `0 0 6px ${hexColor}`;
-    cardName.innerText = b.name || `天體 ${meshIdx}`;
+    cardName.textContent = b.name || `天體 ${meshIdx}`;
 
-    const speed = Math.sqrt((b.vx||0)**2 + (b.vy||0)**2 + (b.vz||0)**2);
-    const distSun = Math.sqrt(b.x**2 + b.y**2 + b.z**2);
-
-    cardRows.innerHTML =
-        makeCardRow('質量', `${b.m.toExponential(3)} M☉`) +
-        makeCardRow('速度', `${speed.toFixed(4)} AU/yr`) +
-        makeCardRow('距原點', `${distSun.toFixed(4)} AU`) +
-        makeCardRow('位置 X', `${b.x.toFixed(4)} AU`) +
-        makeCardRow('位置 Z', `${b.z.toFixed(4)} AU`);
+    updateBodyInfoDOM(b);
 
     // 定位：避免超出螢幕右側和底部
     const cardW = 220, cardH = 140;
@@ -696,12 +682,12 @@ function calcSystemEnergy(positions, velocities, masses) {
 
     if (initialEnergy === null && r.E !== 0) initialEnergy = r.E;
 
-    document.getElementById('energy-k').innerText = r.K.toExponential(4);
-    document.getElementById('energy-u').innerText = r.U.toExponential(4);
+    document.getElementById('energy-k').textContent = r.K.toExponential(4);
+    document.getElementById('energy-u').textContent = r.U.toExponential(4);
     if (initialEnergy !== null && initialEnergy !== 0) {
         const drift = Math.abs((r.E - initialEnergy) / initialEnergy) * 100;
         const driftEl = document.getElementById('energy-drift');
-        driftEl.innerText = drift.toFixed(6) + '%';
+        driftEl.textContent = drift.toFixed(6) + '%';
         if (drift > 1) driftEl.className = 'font-mono text-red-400';
         else if (drift > 0.01) driftEl.className = 'font-mono text-yellow-400';
         else driftEl.className = 'font-mono text-green-400';
@@ -935,14 +921,7 @@ function animate() {
         if (!b || b.m === 0) {
             hideBodyInfo();
         } else {
-            const speed = Math.sqrt((b.vx||0)**2 + (b.vy||0)**2 + (b.vz||0)**2);
-            const distSun = Math.sqrt(b.x**2 + b.y**2 + b.z**2);
-            cardRows.innerHTML =
-                makeCardRow('質量', `${b.m.toExponential(3)} M☉`) +
-                makeCardRow('速度', `${speed.toFixed(4)} AU/yr`) +
-                makeCardRow('距原點', `${distSun.toFixed(4)} AU`) +
-                makeCardRow('位置 X', `${b.x.toFixed(4)} AU`) +
-                makeCardRow('位置 Z', `${b.z.toFixed(4)} AU`);
+            updateBodyInfoDOM(b);
         }
     }
 
@@ -960,7 +939,7 @@ function animate() {
                     return; // 丟棄過期資料
                 }
                 updateVisuals(result.positions, result.masses, result.velocities);
-                updateSimStats(steps);
+                updateSimStats(result.totalDt !== undefined ? result.totalDt : steps * 0.0001);
                 if (mergerHappened) {
                     initialEnergy = null;
                     mergerHappened = false;

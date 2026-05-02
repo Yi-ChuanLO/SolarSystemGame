@@ -226,7 +226,11 @@ self.onmessage = function(e) {
         computeAccelerations();
         self.postMessage({ type: 'added', ok: true });
     } else if (data.type === 'step') {
-        for (let s = 0; s < data.steps; s++) verletStep();
+        let totalDt = 0;
+        for (let s = 0; s < data.steps; s++) {
+            totalDt += nextSafeDt;
+            verletStep();
+        }
         const positions = new Float32Array(bodies.length * 3);
         const velocities = new Float32Array(bodies.length * 3);
         const masses = new Float32Array(bodies.length);
@@ -239,7 +243,7 @@ self.onmessage = function(e) {
             velocities[i*3+2]= bodies[i].vz;
             masses[i]        = bodies[i].m;
         }
-        self.postMessage({ type: 'update', positions, velocities, masses }, [positions.buffer, velocities.buffer, masses.buffer]);
+        self.postMessage({ type: 'update', positions, velocities, masses, totalDt }, [positions.buffer, velocities.buffer, masses.buffer]);
     }
 };
 

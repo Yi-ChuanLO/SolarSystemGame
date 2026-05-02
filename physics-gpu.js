@@ -32,6 +32,7 @@ struct Dt { cur: u32, next: atomic<u32> };
 // 宣告 Workgroup Shared Memory，用以加速 subSteps 迴圈
 var<workgroup> sB: array<Body, WG>;
 var<workgroup> sDtDrift: f32; // 本步 Kick1+Drift+Kick2 實際使用的 dt
+var<workgroup> sTotalDt: f32; // 累積總時間
 var<workgroup> sDtNext: atomic<u32>;
 var<workgroup> swallowedBy: array<i32, WG>;
 
@@ -46,6 +47,7 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
     }
     if (i == 0) {
         atomicStore(&sDtNext, atomicLoad(&dt.next));
+        sTotalDt = 0.0;
     }
     workgroupBarrier();
 
@@ -54,6 +56,7 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
         // --- Swap DT ---
         if (i == 0) {
             sDtDrift = bitcast<f32>(atomicLoad(&sDtNext)); // 本步所有階段使用的 dt
+            sTotalDt += sDtDrift;
             atomicStore(&sDtNext, bitcast<u32>(P.BASE_DT));
         }
         workgroupBarrier();
@@ -275,6 +278,11 @@ fn simulateSubsteps(@builtin(local_invocation_id) lid: vec3u) {
     }
 
     // 3. 將結果寫回 Global Memory
+    if (i == 0) {
+        sB[0].acc.w = sTotalDt;
+    }
+    workgroupBarrier();
+
     if (i < N) {
         B[i] = sB[i];
     }
@@ -483,20 +491,22 @@ export class WebGPUPhysics {
                 out.velocities[i*3+1] = raw[i*12+5];
                 out.velocities[i*3+2] = raw[i*12+6];
             }
+            const totalDt = raw[11]; // B[0].acc.w is at index 11
             currentReadBuf.unmap();
             const result = { 
-                positions: out.positions.subarray(0, currentN * 3), 
-                velocities: out.velocities.subarray(0, currentN * 3), 
-                masses: out.masses.subarray(0, currentN),
+                positions: out.positions, 
+                velocities: out.velocities, 
+                masses: out.masses,
+                totalDt: totalDt,
                 version: currentVersion
             };
             return result;
         }).catch(e => {
-            console.error('GPU readback failed:', e);
             return { 
-                positions: out.positions.subarray(0, currentN * 3), 
-                velocities: out.velocities.subarray(0, currentN * 3), 
-                masses: out.masses.subarray(0, currentN),
+                positions: out.positions, 
+                velocities: out.velocities, 
+                masses: out.masses,
+                totalDt: 0.0001,
                 version: currentVersion
             };
         });
